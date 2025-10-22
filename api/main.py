@@ -143,8 +143,8 @@ async def process_barcode(request: BarcodeRequest):
         if not product_result:
             return ApprovalResponse(
                 success=False,
-                message=f"Изделие '{construction_number}' заказа '{order_name}' не найдено",
-                voice_message=f"Изделие {construction_number} заказа {order_name} не найдено",
+                message=f"Изделие {construction_number} заказа №{order_name} не найдено",
+                voice_message=f"Изделие {construction_number} заказа №{order_name} не найдено",
                 product_info=None
             )
         
@@ -184,8 +184,8 @@ async def process_barcode(request: BarcodeRequest):
         if not whdetail_result:
             return ApprovalResponse(
                 success=False,
-                message=f"Изделие {construction_number} заказа {order_number} не найдено на складе",
-                voice_message=f"Изделие {construction_number} заказа {order_number} не найдено на складе",
+                message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
+                voice_message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
                 product_info=None
             )
         
@@ -244,7 +244,7 @@ async def process_barcode(request: BarcodeRequest):
         
         return ApprovalResponse(
             success=True,
-            message="Изделие успешно приходовано",
+            message="Изделие успешно оприходовано",
             voice_message=voice_message,
             product_info=ProductInfo(
                 order_number=order_number,

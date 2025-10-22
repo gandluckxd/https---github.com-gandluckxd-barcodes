@@ -45,7 +45,7 @@ uvicorn main:app --host 0.0.0.0 --port 8015 --reload
 ```json
 {
   "success": true,
-  "message": "Изделие успешно приходовано",
+  "message": "Изделие успешно оприходовано",
   "voice_message": "Изделие номер 1 заказа 19561 конструкции 02 готово",
   "product_info": {
     "order_number": "19561",

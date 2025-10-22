@@ -293,7 +293,7 @@ class BarcodeApp(QMainWindow):
         """Получить текст статистики"""
         return (f"Всего: {self.stats['total']} | "
                 f"✅ Успешно: {self.stats['success']} | "
-                f"⚠️ Уже приходовано: {self.stats['already_approved']} | "
+                f"⚠️ Уже оприходовано: {self.stats['already_approved']} | "
                 f"❌ Ошибок: {self.stats['failed']}")
     
     def check_api_connection(self):
@@ -373,7 +373,7 @@ class BarcodeApp(QMainWindow):
             # Проверяем, это уже приходованное изделие или ошибка
             if "уже было отмечено готовым" in message.lower():
                 self.stats['already_approved'] += 1
-                status = "⚠️ Уже приходовано"
+                status = "⚠️ Уже оприходовано"
                 status_color = QColor(255, 165, 0)
             else:
                 self.stats['failed'] += 1
