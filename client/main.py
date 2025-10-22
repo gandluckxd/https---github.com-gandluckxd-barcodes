@@ -2,10 +2,13 @@
 Клиентское приложение для системы учета готовности изделий
 """
 import sys
+import os
 import requests
-import pyttsx3
 import threading
 from datetime import datetime
+from gtts import gTTS
+import pygame
+import tempfile
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
@@ -74,38 +77,50 @@ def create_emoji_icon():
 
 
 class TTSWorker(QObject):
-    """Класс для работы с TTS в отдельном потоке"""
+    """Класс для работы с TTS в отдельном потоке (Google TTS)"""
     
     def __init__(self):
         super().__init__()
-        self.engine = None
         self.init_engine()
     
     def init_engine(self):
         """Инициализация TTS движка"""
         try:
-            self.engine = pyttsx3.init()
-            self.engine.setProperty('rate', config.TTS_RATE)
-            self.engine.setProperty('volume', config.TTS_VOLUME)
-            
-            # Пытаемся установить русский голос
-            voices = self.engine.getProperty('voices')
-            for voice in voices:
-                if 'ru' in voice.languages or 'russian' in voice.name.lower():
-                    self.engine.setProperty('voice', voice.id)
-                    break
+            # Инициализация pygame mixer для воспроизведения звука
+            pygame.mixer.init()
         except Exception as e:
-            print(f"Ошибка инициализации TTS: {e}")
-            self.engine = None
+            print(f"Ошибка инициализации pygame mixer: {e}")
     
     def speak(self, text):
-        """Озвучить текст"""
-        if self.engine:
-            try:
-                self.engine.say(text)
-                self.engine.runAndWait()
-            except Exception as e:
-                print(f"Ошибка озвучивания: {e}")
+        """Озвучить текст с помощью Google TTS"""
+        temp_file = None
+        try:
+            # Создаем временный файл для аудио
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
+                temp_file = fp.name
+            
+            # Генерируем речь через Google TTS
+            tts = gTTS(text=text, lang='ru', slow=False)
+            tts.save(temp_file)
+            
+            # Воспроизводим звук
+            pygame.mixer.music.load(temp_file)
+            pygame.mixer.music.play()
+            
+            # Ждем окончания воспроизведения
+            while pygame.mixer.music.get_busy():
+                pygame.time.Clock().tick(10)
+            
+        except Exception as e:
+            print(f"Ошибка озвучивания: {e}")
+        finally:
+            # Удаляем временный файл
+            if temp_file and os.path.exists(temp_file):
+                try:
+                    pygame.mixer.music.unload()
+                    os.remove(temp_file)
+                except Exception as e:
+                    print(f"Ошибка удаления временного файла: {e}")
 
 
 class BarcodeApp(QMainWindow):
