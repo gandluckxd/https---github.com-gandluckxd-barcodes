@@ -422,48 +422,50 @@ class BarcodeApp(QMainWindow):
         
         self.history_table.insertRow(0)  # Добавляем в начало
         
-        # Время
-        time_item = QTableWidgetItem(current_time)
-        self.history_table.setItem(0, 0, time_item)
+        # Порядок столбцов: "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Время", "Сообщение"
         
-        # Статус
+        # Статус (колонка 0)
         status_item = QTableWidgetItem(status)
         status_item.setForeground(status_color)
         font = QFont()
         font.setPointSize(13)
         font.setBold(True)
         status_item.setFont(font)
-        self.history_table.setItem(0, 1, status_item)
+        self.history_table.setItem(0, 0, status_item)
         
-        # Штрихкод
-        self.history_table.setItem(0, 2, QTableWidgetItem(barcode))
+        # Штрихкод (колонка 1)
+        self.history_table.setItem(0, 1, QTableWidgetItem(barcode))
         
         if product_info:
-            # Заказ
-            self.history_table.setItem(0, 3, QTableWidgetItem(product_info.get('order_number', '')))
+            # Заказ (колонка 2)
+            self.history_table.setItem(0, 2, QTableWidgetItem(product_info.get('order_number', '')))
             
-            # Конструкция
-            self.history_table.setItem(0, 4, QTableWidgetItem(product_info.get('construction_number', '')))
+            # Изделие (колонка 3)
+            self.history_table.setItem(0, 3, QTableWidgetItem(product_info.get('construction_number', '')))
             
-            # Изделие №
+            # Номер № (колонка 4)
             item_num = f"{product_info.get('item_number', '')} / {product_info.get('qty', '')}"
-            self.history_table.setItem(0, 5, QTableWidgetItem(item_num))
+            self.history_table.setItem(0, 4, QTableWidgetItem(item_num))
             
-            # Размеры
+            # Размеры (колонка 5)
             width = product_info.get('width', 0)
             height = product_info.get('height', 0)
             if width and height:
                 size_str = f"{width} x {height}"
             else:
                 size_str = "-"
-            self.history_table.setItem(0, 6, QTableWidgetItem(size_str))
+            self.history_table.setItem(0, 5, QTableWidgetItem(size_str))
         else:
+            self.history_table.setItem(0, 2, QTableWidgetItem("-"))
             self.history_table.setItem(0, 3, QTableWidgetItem("-"))
             self.history_table.setItem(0, 4, QTableWidgetItem("-"))
             self.history_table.setItem(0, 5, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 6, QTableWidgetItem("-"))
         
-        # Сообщение
+        # Время (колонка 6)
+        time_item = QTableWidgetItem(current_time)
+        self.history_table.setItem(0, 6, time_item)
+        
+        # Сообщение (колонка 7)
         self.history_table.setItem(0, 7, QTableWidgetItem(message))
         
         # Ограничиваем историю до 100 записей

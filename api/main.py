@@ -1,9 +1,8 @@
 """
 API сервер для системы учета готовности изделий
 """
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from datetime import datetime
 import fdb
 
 from models import BarcodeRequest, ApprovalResponse, ProductInfo, HealthResponse
@@ -39,7 +38,7 @@ async def health_check():
             status="ok" if db_connected else "error",
             database_connected=db_connected
         )
-    except Exception as e:
+    except Exception:
         return HealthResponse(
             status="error",
             database_connected=False
@@ -51,9 +50,9 @@ async def process_barcode(request: BarcodeRequest):
     """
     Обработка штрихкода и приходование изделия
     
-    Формат штрихкода: [номер изделия][grordersdetailid]
-    - Первая цифра - номер изделия (1, 2, 3...)
-    - Остальные цифры - GRORDERSDETAILID
+    Формат штрихкода: [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
+    - Первые 2 цифры - номер изделия (01, 02, ... 15...)
+    - Остальные 7 цифр - ORDERITEMSID стеклопакета (заполнения)
     """
     try:
         barcode = request.barcode.strip()
@@ -67,49 +66,92 @@ async def process_barcode(request: BarcodeRequest):
                 product_info=None
             )
         
-        if len(barcode) < 2:
+        if len(barcode) != 9:
             return ApprovalResponse(
                 success=False,
-                message="Штрихкод слишком короткий",
-                voice_message="Ошибка. Штрихкод слишком короткий",
+                message=f"Штрихкод должен содержать 9 цифр (получено: {len(barcode)})",
+                voice_message="Ошибка. Неверная длина штрихкода",
                 product_info=None
             )
         
         # Парсим штрихкод
-        item_number = int(barcode[0])  # Первая цифра - номер изделия
-        grordersdetail_id = int(barcode[1:])  # Остальное - GRORDERSDETAILID
+        item_number = int(barcode[:2])  # Первые 2 цифры - номер изделия
+        glass_orderitems_id = int(barcode[2:])  # Остальные 7 цифр - ORDERITEMSID стеклопакета
         
-        # 1. Находим ORDERITEMSID по GRORDERSDETAILID
-        query_grorders = """
+        # 1. Находим ORDERITEMS стеклопакета по его ID
+        query_glass = """
             SELECT 
-                d.GRORDERDETAILID,
-                d.ORDERITEMSID,
-                d.QTY,
-                oi.NAME as ORDERITEM_NAME,
-                oi.QTY as ORDERITEM_QTY,
-                o.ORDERNO,
-                o.ORDERID
-            FROM GRORDERSDETAIL d
-            INNER JOIN ORDERITEMS oi ON d.ORDERITEMSID = oi.ORDERITEMSID
+                oi.ORDERITEMSID,
+                oi.NAME as GLASS_NAME,
+                oi.ORDERID,
+                o.ORDERNO
+            FROM ORDERITEMS oi
             INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
-            WHERE d.GRORDERDETAILID = ?
+            WHERE oi.ORDERITEMSID = ?
         """
         
-        grorders_result = db.execute_query(query_grorders, (grordersdetail_id,))
+        glass_result = db.execute_query(query_glass, (glass_orderitems_id,))
         
-        if not grorders_result:
+        if not glass_result:
             return ApprovalResponse(
                 success=False,
-                message=f"Изделие с ID {grordersdetail_id} не найдено в базе данных",
-                voice_message="Изделие не найдено в базе данных",
+                message=f"Стеклопакет с ID {glass_orderitems_id} не найден в базе данных",
+                voice_message="Стеклопакет не найден в базе данных",
                 product_info=None
             )
         
-        grorder_data = grorders_result[0]
-        orderitems_id = grorder_data['ORDERITEMSID']
-        order_number = grorder_data['ORDERNO'].strip() if grorder_data['ORDERNO'] else "?"
-        construction_number = grorder_data['ORDERITEM_NAME'].strip() if grorder_data['ORDERITEM_NAME'] else "?"
-        orderitem_qty = grorder_data['ORDERITEM_QTY']
+        glass_data = glass_result[0]
+        glass_name = glass_data['GLASS_NAME'].strip() if glass_data['GLASS_NAME'] else ""
+        
+        # 2. Парсим NAME стеклопакета: "19686 / 01 / С-1 [G 2 665]"
+        # Формат: [номер заказа] / [номер изделия] / [проём] [...]
+        if not glass_name or '/' not in glass_name:
+            return ApprovalResponse(
+                success=False,
+                message=f"Некорректный формат имени стеклопакета: {glass_name}",
+                voice_message="Ошибка. Некорректный формат имени стеклопакета",
+                product_info=None
+            )
+        
+        parts = glass_name.split('/')
+        if len(parts) < 2:
+            return ApprovalResponse(
+                success=False,
+                message=f"Не удалось распарсить имя стеклопакета: {glass_name}",
+                voice_message="Ошибка парсинга имени стеклопакета",
+                product_info=None
+            )
+        
+        order_name = parts[0].strip()  # "19686"
+        construction_number = parts[1].strip()  # "01"
+        
+        # 3. Находим ORDERITEMSID изделия по названию заказа и номеру конструкции
+        query_product = """
+            SELECT 
+                oi.ORDERITEMSID,
+                oi.NAME as PRODUCT_NAME,
+                oi.QTY,
+                o.ORDERNO,
+                o.ORDERID
+            FROM ORDERITEMS oi
+            INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
+            WHERE o.ORDERNO = ? AND oi.NAME = ?
+        """
+        
+        product_result = db.execute_query(query_product, (order_name, construction_number))
+        
+        if not product_result:
+            return ApprovalResponse(
+                success=False,
+                message=f"Изделие '{construction_number}' заказа '{order_name}' не найдено",
+                voice_message=f"Изделие {construction_number} заказа {order_name} не найдено",
+                product_info=None
+            )
+        
+        product_data = product_result[0]
+        orderitems_id = product_data['ORDERITEMSID']
+        order_number = product_data['ORDERNO'].strip() if product_data['ORDERNO'] else "?"
+        orderitem_qty = product_data['QTY']
         
         # Проверяем, что номер изделия не превышает количество
         if item_number > orderitem_qty:
@@ -120,7 +162,7 @@ async def process_barcode(request: BarcodeRequest):
                 product_info=None
             )
         
-        # 2. Находим запись в CT_WHDETAIL по ORDERITEMSID и ITEMNO
+        # 4. Находим запись в CT_WHDETAIL по ORDERITEMSID изделия и ITEMNO
         query_whdetail = """
             SELECT 
                 w.CTWHDETAILID,
@@ -142,8 +184,8 @@ async def process_barcode(request: BarcodeRequest):
         if not whdetail_result:
             return ApprovalResponse(
                 success=False,
-                message=f"Изделие №{item_number} заказа {order_number} не найдено на складе",
-                voice_message=f"Изделие номер {item_number} заказа {order_number} не найдено на складе",
+                message=f"Изделие {construction_number} заказа {order_number} не найдено на складе",
+                voice_message=f"Изделие {construction_number} заказа {order_number} не найдено на складе",
                 product_info=None
             )
         
@@ -154,7 +196,7 @@ async def process_barcode(request: BarcodeRequest):
         width = whdetail_data['WIDTH']
         height = whdetail_data['HEIGHT']
         
-        # 3. Проверяем, не приходовано ли уже
+        # 5. Проверяем, не приходовано ли уже
         if is_approved == 1:
             date_approved = whdetail_data['DATEAPPROVED']
             date_str = ""
@@ -175,11 +217,11 @@ async def process_barcode(request: BarcodeRequest):
                     element_name=element_name,
                     width=width,
                     height=height,
-                    grordersdetail_id=grordersdetail_id
+                    glass_orderitems_id=glass_orderitems_id
                 )
             )
         
-        # 4. Приходуем изделие - обновляем CT_WHDETAIL
+        # 6. Приходуем изделие - обновляем CT_WHDETAIL
         update_query = """
             UPDATE CT_WHDETAIL
             SET ISAPPROVED = 1,
@@ -197,12 +239,12 @@ async def process_barcode(request: BarcodeRequest):
                 product_info=None
             )
         
-        # 5. Формируем успешный ответ
-        voice_message = f"Изделие номер {item_number} заказа {order_number} конструкции {construction_number} готово"
+        # 7. Формируем успешный ответ
+        voice_message = f"Изделие {construction_number} заказа {order_number} готово"
         
         return ApprovalResponse(
             success=True,
-            message=f"Изделие успешно приходовано",
+            message="Изделие успешно приходовано",
             voice_message=voice_message,
             product_info=ProductInfo(
                 order_number=order_number,
@@ -214,7 +256,7 @@ async def process_barcode(request: BarcodeRequest):
                 element_name=element_name,
                 width=width,
                 height=height,
-                grordersdetail_id=grordersdetail_id
+                glass_orderitems_id=glass_orderitems_id
             )
         )
         

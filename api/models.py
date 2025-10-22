@@ -8,12 +8,12 @@ from datetime import datetime
 
 class BarcodeRequest(BaseModel):
     """Запрос на обработку штрихкода"""
-    barcode: str = Field(..., description="Штрихкод в формате: [номер изделия][grordersdetailid]")
+    barcode: str = Field(..., description="Штрихкод в формате: [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]")
     
     class Config:
         json_schema_extra = {
             "example": {
-                "barcode": "1109565"
+                "barcode": "011234567"
             }
         }
 
@@ -23,13 +23,13 @@ class ProductInfo(BaseModel):
     order_number: str = Field(..., description="Номер заказа")
     construction_number: str = Field(..., description="Номер конструкции")
     item_number: int = Field(..., description="Номер изделия")
-    orderitems_id: int = Field(..., description="ID элемента заказа")
+    orderitems_id: int = Field(..., description="ID элемента заказа (изделия)")
     orderitems_name: str = Field(..., description="Наименование элемента заказа")
     qty: int = Field(..., description="Общее количество изделий")
     element_name: Optional[str] = Field(None, description="Наименование элемента")
     width: Optional[int] = Field(None, description="Ширина")
     height: Optional[int] = Field(None, description="Высота")
-    grordersdetail_id: int = Field(..., description="ID записи в GRORDERSDETAIL")
+    glass_orderitems_id: int = Field(..., description="ID стеклопакета в ORDERITEMS")
 
 
 class ApprovalResponse(BaseModel):
@@ -44,18 +44,18 @@ class ApprovalResponse(BaseModel):
             "example": {
                 "success": True,
                 "message": "Изделие успешно приходовано",
-                "voice_message": "Изделие номер 1 заказа 19561 конструкции 02 готово",
+                "voice_message": "Изделие номер 1 конструкции 01 заказа 19686 готово",
                 "product_info": {
-                    "order_number": "19561",
-                    "construction_number": "02",
+                    "order_number": "19686",
+                    "construction_number": "01",
                     "item_number": 1,
                     "orderitems_id": 137660,
-                    "orderitems_name": "02",
+                    "orderitems_name": "01",
                     "qty": 1,
-                    "element_name": "19561 / 02 / 1",
+                    "element_name": "19686 / 01 / 1",
                     "width": 1200,
                     "height": 1400,
-                    "grordersdetail_id": 109565
+                    "glass_orderitems_id": 1234567
                 }
             }
         }
