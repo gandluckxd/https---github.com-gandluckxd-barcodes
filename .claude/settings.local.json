@@ -7,7 +7,11 @@
       "Bash(dir d:barcodes.env)",
       "Bash(ping:*)",
       "Bash(Test-NetConnection -ComputerName 10.8.0.14 -Port 3050)",
-      "Bash(powershell -Command:*)"
+      "Bash(powershell -Command:*)",
+      "Bash(python -m py_compile:*)",
+      "Bash(where:*)",
+      "Bash(./venv/Scripts/python.exe -m py_compile api/main.py)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []

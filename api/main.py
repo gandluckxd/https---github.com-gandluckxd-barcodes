@@ -211,7 +211,39 @@ async def process_barcode(request: BarcodeRequest):
             date_str = ""
             if date_approved:
                 date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
-            
+
+            # Получаем статистику по заказу для уже приходованного изделия
+            order_id = product_data['ORDERID']
+
+            query_total_items = """
+                SELECT SUM(wd.qty) as TOTAL
+                FROM ORDERS o
+                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                WHERE o.ORDERID = ?
+                AND el.CTTYPEELEMSID = 2
+            """
+
+            query_approved_items = """
+                SELECT SUM(wd.qty) as APPROVED
+                FROM ORDERS o
+                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                WHERE o.ORDERID = ?
+                AND el.CTTYPEELEMSID = 2
+                AND wd.ISAPPROVED = 1
+            """
+
+            total_items_result = db.execute_query(query_total_items, (order_id,))
+            approved_items_result = db.execute_query(query_approved_items, (order_id,))
+
+            total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
+            approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
+
             return ApprovalResponse(
                 success=False,
                 message=f"Изделие уже было отмечено готовым{date_str}",
@@ -226,7 +258,10 @@ async def process_barcode(request: BarcodeRequest):
                     element_name=element_name,
                     width=width,
                     height=height,
-                    glass_orderitems_id=glass_orderitems_id
+                    glass_orderitems_id=glass_orderitems_id,
+                    order_id=order_id,
+                    total_items_in_order=total_items_in_order,
+                    approved_items_in_order=approved_items_in_order
                 )
             )
         
@@ -239,7 +274,7 @@ async def process_barcode(request: BarcodeRequest):
         """
         
         rows_updated = db.execute_update(update_query, (ctwhdetail_id,))
-        
+
         if rows_updated == 0:
             return ApprovalResponse(
                 success=False,
@@ -247,10 +282,44 @@ async def process_barcode(request: BarcodeRequest):
                 voice_message="Ошибка при обновлении базы данных",
                 product_info=None
             )
-        
-        # 7. Формируем успешный ответ
+
+        # 7. Получаем статистику по заказу (ПОСЛЕ проводки)
+        order_id = product_data['ORDERID']
+
+        # Запрос для получения общего количества изделий в заказе
+        query_total_items = """
+            SELECT SUM(wd.qty) as TOTAL
+            FROM ORDERS o
+            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            WHERE o.ORDERID = ?
+            AND el.CTTYPEELEMSID = 2
+        """
+
+        # Запрос для получения количества проведенных изделий в заказе
+        query_approved_items = """
+            SELECT SUM(wd.qty) as APPROVED
+            FROM ORDERS o
+            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            WHERE o.ORDERID = ?
+            AND el.CTTYPEELEMSID = 2
+            AND wd.ISAPPROVED = 1
+        """
+
+        total_items_result = db.execute_query(query_total_items, (order_id,))
+        approved_items_result = db.execute_query(query_approved_items, (order_id,))
+
+        total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
+        approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
+
+        # 8. Формируем успешный ответ
         voice_message = f"Изделие {construction_number} заказа {order_number} готово"
-        
+
         return ApprovalResponse(
             success=True,
             message="Изделие успешно оприходовано",
@@ -265,7 +334,10 @@ async def process_barcode(request: BarcodeRequest):
                 element_name=element_name,
                 width=width,
                 height=height,
-                glass_orderitems_id=glass_orderitems_id
+                glass_orderitems_id=glass_orderitems_id,
+                order_id=order_id,
+                total_items_in_order=total_items_in_order,
+                approved_items_in_order=approved_items_in_order
             )
         )
         

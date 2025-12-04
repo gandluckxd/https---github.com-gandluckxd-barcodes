@@ -81,38 +81,69 @@ class TTSWorker(QObject):
     
     def __init__(self):
         super().__init__()
+        self.audio_available = False
         self.init_engine()
-    
+
     def init_engine(self):
         """Инициализация TTS движка"""
         try:
-            # Инициализация pygame mixer для воспроизведения звука
-            pygame.mixer.init()
+            # Пытаемся инициализировать pygame mixer с разными настройками
+            try:
+                # Стандартная инициализация
+                pygame.mixer.init()
+                print("✓ Pygame mixer инициализирован успешно (стандартный режим)")
+                self.audio_available = True
+            except Exception as e:
+                print(f"⚠ Ошибка стандартной инициализации pygame mixer: {e}")
+                try:
+                    # Пробуем с явными параметрами (низкая частота)
+                    pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+                    print("✓ Pygame mixer инициализирован успешно (режим 22050Hz)")
+                    self.audio_available = True
+                except Exception as e2:
+                    print(f"⚠ Ошибка инициализации с параметрами 22050Hz: {e2}")
+                    try:
+                        # Пробуем с минимальными параметрами (моно)
+                        pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=4096)
+                        print("✓ Pygame mixer инициализирован успешно (режим 44100Hz mono)")
+                        self.audio_available = True
+                    except Exception as e3:
+                        print(f"❌ Не удалось инициализировать pygame mixer: {e3}")
+                        print("⚠ Голосовые уведомления будут отключены")
+                        self.audio_available = False
         except Exception as e:
-            print(f"Ошибка инициализации pygame mixer: {e}")
-    
+            print(f"❌ Критическая ошибка инициализации TTS: {e}")
+            self.audio_available = False
+
     def speak(self, text):
         """Озвучить текст с помощью Google TTS"""
+        # Проверяем доступность аудио
+        if not self.audio_available:
+            print(f"⚠ Аудио недоступно, пропускаем озвучивание: {text}")
+            return
+
         temp_file = None
         try:
             # Создаем временный файл для аудио
             with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
                 temp_file = fp.name
-            
+
             # Генерируем речь через Google TTS
             tts = gTTS(text=text, lang='ru', slow=False)
             tts.save(temp_file)
-            
+
             # Воспроизводим звук
             pygame.mixer.music.load(temp_file)
             pygame.mixer.music.play()
-            
+
             # Ждем окончания воспроизведения
             while pygame.mixer.music.get_busy():
                 pygame.time.Clock().tick(10)
-            
+
         except Exception as e:
-            print(f"Ошибка озвучивания: {e}")
+            print(f"❌ Ошибка озвучивания: {e}")
+            # При ошибке отключаем аудио, чтобы не пытаться повторять
+            self.audio_available = False
         finally:
             # Удаляем временный файл
             if temp_file and os.path.exists(temp_file):
@@ -120,7 +151,7 @@ class TTSWorker(QObject):
                     pygame.mixer.music.unload()
                     os.remove(temp_file)
                 except Exception as e:
-                    print(f"Ошибка удаления временного файла: {e}")
+                    print(f"⚠ Ошибка удаления временного файла: {e}")
 
 
 class BarcodeApp(QMainWindow):
@@ -167,7 +198,7 @@ class BarcodeApp(QMainWindow):
         # === Заголовок ===
         title_label = QLabel("📦 Система учета готовности изделий")
         title_font = QFont()
-        title_font.setPointSize(28)
+        title_font.setPointSize(42)
         title_font.setBold(True)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
@@ -177,7 +208,7 @@ class BarcodeApp(QMainWindow):
         self.connection_status = QLabel("🔴 Проверка подключения...")
         self.connection_status.setAlignment(Qt.AlignCenter)
         status_font = QFont()
-        status_font.setPointSize(16)
+        status_font.setPointSize(24)
         status_font.setBold(True)
         self.connection_status.setFont(status_font)
         main_layout.addWidget(self.connection_status)
@@ -185,35 +216,35 @@ class BarcodeApp(QMainWindow):
         # === Ввод штрихкода ===
         barcode_group = QGroupBox("Ввод штрихкода")
         group_font = QFont()
-        group_font.setPointSize(16)
+        group_font.setPointSize(24)
         group_font.setBold(True)
         barcode_group.setFont(group_font)
         barcode_layout = QHBoxLayout()
         barcode_group.setLayout(barcode_layout)
-        
+
         barcode_label = QLabel("Штрихкод:")
-        barcode_label.setMinimumWidth(180)
+        barcode_label.setMinimumWidth(270)
         label_font = QFont()
-        label_font.setPointSize(18)
+        label_font.setPointSize(27)
         label_font.setBold(True)
         barcode_label.setFont(label_font)
         barcode_layout.addWidget(barcode_label)
-        
+
         self.barcode_input = QLineEdit()
         self.barcode_input.setPlaceholderText("Отсканируйте штрихкод или введите вручную...")
         self.barcode_input.returnPressed.connect(self.process_barcode)
         barcode_font = QFont()
-        barcode_font.setPointSize(20)
+        barcode_font.setPointSize(30)
         self.barcode_input.setFont(barcode_font)
-        self.barcode_input.setMinimumHeight(60)
+        self.barcode_input.setMinimumHeight(90)
         barcode_layout.addWidget(self.barcode_input)
-        
+
         process_btn = QPushButton("Обработать")
         process_btn.clicked.connect(self.process_barcode)
-        process_btn.setMinimumHeight(60)
-        process_btn.setMinimumWidth(200)
+        process_btn.setMinimumHeight(90)
+        process_btn.setMinimumWidth(300)
         btn_font = QFont()
-        btn_font.setPointSize(18)
+        btn_font.setPointSize(27)
         btn_font.setBold(True)
         process_btn.setFont(btn_font)
         barcode_layout.addWidget(process_btn)
@@ -223,16 +254,16 @@ class BarcodeApp(QMainWindow):
         # === Статистика ===
         stats_group = QGroupBox("Статистика")
         stats_group_font = QFont()
-        stats_group_font.setPointSize(16)
+        stats_group_font.setPointSize(24)
         stats_group_font.setBold(True)
         stats_group.setFont(stats_group_font)
         stats_layout = QHBoxLayout()
         stats_group.setLayout(stats_layout)
-        
+
         self.stats_label = QLabel(self.get_stats_text())
         self.stats_label.setAlignment(Qt.AlignCenter)
         stats_font = QFont()
-        stats_font.setPointSize(16)
+        stats_font.setPointSize(24)
         stats_font.setBold(True)
         self.stats_label.setFont(stats_font)
         stats_layout.addWidget(self.stats_label)
@@ -242,27 +273,27 @@ class BarcodeApp(QMainWindow):
         # === История сканирований ===
         history_group = QGroupBox("История сканирований")
         history_group_font = QFont()
-        history_group_font.setPointSize(16)
+        history_group_font.setPointSize(24)
         history_group_font.setBold(True)
         history_group.setFont(history_group_font)
         history_layout = QVBoxLayout()
         history_group.setLayout(history_layout)
-        
+
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(8)
+        self.history_table.setColumnCount(9)
         self.history_table.setHorizontalHeaderLabels([
-            "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Время", "Сообщение"
+            "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
         ])
-        
+
         # Увеличиваем шрифт таблицы
         table_font = QFont()
-        table_font.setPointSize(13)
+        table_font.setPointSize(19)
         self.history_table.setFont(table_font)
-        
+
         # Увеличиваем шрифт заголовков
         header = self.history_table.horizontalHeader()
         header_font = QFont()
-        header_font.setPointSize(14)
+        header_font.setPointSize(21)
         header_font.setBold(True)
         header.setFont(header_font)
         
@@ -273,11 +304,12 @@ class BarcodeApp(QMainWindow):
         header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Изделие
         header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Номер №
         header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Размеры
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Время
-        header.setSectionResizeMode(7, QHeaderView.Stretch)  # Сообщение растягивается
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Кол-во в заказе
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Кол-во готово
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Время
         
         # Увеличиваем высоту строк
-        self.history_table.verticalHeader().setDefaultSectionSize(40)
+        self.history_table.verticalHeader().setDefaultSectionSize(60)
         
         self.history_table.setAlternatingRowColors(True)
         self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -431,34 +463,34 @@ class BarcodeApp(QMainWindow):
     def add_to_history(self, status, status_color, message, product_info, barcode=""):
         """Добавить запись в историю"""
         current_time = datetime.now().strftime("%H:%M:%S")
-        
+
         self.history_table.insertRow(0)  # Добавляем в начало
-        
-        # Порядок столбцов: "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Время", "Сообщение"
-        
+
+        # Порядок столбцов: "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
+
         # Статус (колонка 0)
         status_item = QTableWidgetItem(status)
         status_item.setForeground(status_color)
         font = QFont()
-        font.setPointSize(13)
+        font.setPointSize(19)
         font.setBold(True)
         status_item.setFont(font)
         self.history_table.setItem(0, 0, status_item)
-        
+
         # Штрихкод (колонка 1)
         self.history_table.setItem(0, 1, QTableWidgetItem(barcode))
-        
+
         if product_info:
             # Заказ (колонка 2)
             self.history_table.setItem(0, 2, QTableWidgetItem(product_info.get('order_number', '')))
-            
+
             # Изделие (колонка 3)
             self.history_table.setItem(0, 3, QTableWidgetItem(product_info.get('construction_number', '')))
-            
+
             # Номер № (колонка 4)
             item_num = f"{product_info.get('item_number', '')} / {product_info.get('qty', '')}"
             self.history_table.setItem(0, 4, QTableWidgetItem(item_num))
-            
+
             # Размеры (колонка 5)
             width = product_info.get('width', 0)
             height = product_info.get('height', 0)
@@ -467,19 +499,26 @@ class BarcodeApp(QMainWindow):
             else:
                 size_str = "-"
             self.history_table.setItem(0, 5, QTableWidgetItem(size_str))
+
+            # Кол-во изделий в заказе (колонка 6)
+            total_items = product_info.get('total_items_in_order', 0)
+            self.history_table.setItem(0, 6, QTableWidgetItem(str(total_items) if total_items else "-"))
+
+            # Проведено изделий в заказе (колонка 7)
+            approved_items = product_info.get('approved_items_in_order', 0)
+            self.history_table.setItem(0, 7, QTableWidgetItem(str(approved_items) if approved_items else "-"))
         else:
             self.history_table.setItem(0, 2, QTableWidgetItem("-"))
             self.history_table.setItem(0, 3, QTableWidgetItem("-"))
             self.history_table.setItem(0, 4, QTableWidgetItem("-"))
             self.history_table.setItem(0, 5, QTableWidgetItem("-"))
-        
-        # Время (колонка 6)
+            self.history_table.setItem(0, 6, QTableWidgetItem("-"))
+            self.history_table.setItem(0, 7, QTableWidgetItem("-"))
+
+        # Время (колонка 8)
         time_item = QTableWidgetItem(current_time)
-        self.history_table.setItem(0, 6, time_item)
-        
-        # Сообщение (колонка 7)
-        self.history_table.setItem(0, 7, QTableWidgetItem(message))
-        
+        self.history_table.setItem(0, 8, time_item)
+
         # Ограничиваем историю до 100 записей
         if self.history_table.rowCount() > 100:
             self.history_table.removeRow(100)

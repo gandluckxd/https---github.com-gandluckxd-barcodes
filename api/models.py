@@ -30,6 +30,9 @@ class ProductInfo(BaseModel):
     width: Optional[int] = Field(None, description="Ширина")
     height: Optional[int] = Field(None, description="Высота")
     glass_orderitems_id: int = Field(..., description="ID стеклопакета в ORDERITEMS")
+    order_id: Optional[int] = Field(None, description="ID заказа")
+    total_items_in_order: Optional[int] = Field(None, description="Общее количество изделий в заказе")
+    approved_items_in_order: Optional[int] = Field(None, description="Количество проведенных изделий в заказе")
 
 
 class ApprovalResponse(BaseModel):
