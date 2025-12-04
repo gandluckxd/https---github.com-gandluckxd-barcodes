@@ -30,15 +30,24 @@ app.add_middleware(
 async def health_check():
     """Проверка работоспособности API и подключения к БД"""
     try:
+        print(f"Попытка подключения к БД: {settings.DB_HOST}:{settings.DB_PORT}")
+        print(f"База данных: {settings.DB_DATABASE}")
+
         # Проверяем подключение к БД
         result = db.execute_query("SELECT 1 FROM RDB$DATABASE")
         db_connected = len(result) > 0
-        
+
+        print(f"✓ Подключение к БД успешно, результат: {result}")
+
         return HealthResponse(
             status="ok" if db_connected else "error",
             database_connected=db_connected
         )
-    except Exception:
+    except Exception as e:
+        print(f"✗ Ошибка подключения к БД: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+
         return HealthResponse(
             status="error",
             database_connected=False

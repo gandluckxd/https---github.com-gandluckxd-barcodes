@@ -299,24 +299,36 @@ class BarcodeApp(QMainWindow):
     def check_api_connection(self):
         """Проверка подключения к API"""
         try:
-            response = requests.get(
-                f"{config.API_BASE_URL}{config.API_HEALTH_ENDPOINT}",
-                timeout=15
-            )
+            url = f"{config.API_BASE_URL}{config.API_HEALTH_ENDPOINT}"
+            print(f"Проверка подключения к API: {url}")
+
+            response = requests.get(url, timeout=15)
+            print(f"Ответ от API: status_code={response.status_code}")
+
             if response.status_code == 200:
                 data = response.json()
+                print(f"Данные от API: {data}")
+
                 if data.get('database_connected'):
                     self.connection_status.setText("🟢 Программа готова к работе")
                     self.connection_status.setStyleSheet("color: green;")
+                    print("✓ API и база данных работают")
                 else:
-                    self.connection_status.setText("🔴 Ошибка подключения")
+                    self.connection_status.setText("🔴 Ошибка подключения к БД")
                     self.connection_status.setStyleSheet("color: red;")
+                    print("✗ API работает, но нет подключения к БД")
             else:
                 self.connection_status.setText("🔴 Ошибка подключения")
                 self.connection_status.setStyleSheet("color: red;")
-        except Exception:
+                print(f"✗ API вернул ошибку: {response.status_code}")
+        except requests.exceptions.ConnectionError as e:
+            self.connection_status.setText("🔴 API сервер недоступен")
+            self.connection_status.setStyleSheet("color: red;")
+            print(f"✗ Не удалось подключиться к API: {e}")
+        except Exception as e:
             self.connection_status.setText("🔴 Ошибка подключения")
             self.connection_status.setStyleSheet("color: red;")
+            print(f"✗ Ошибка проверки подключения: {type(e).__name__}: {e}")
     
     def process_barcode(self):
         """Обработка штрихкода"""
@@ -475,9 +487,15 @@ class BarcodeApp(QMainWindow):
 
 def main():
     """Точка входа в приложение"""
+    print("="*60)
+    print("Запуск клиентского приложения...")
+    print(f"API URL: {config.API_BASE_URL}")
+    print(f"Python version: {sys.version}")
+    print("="*60)
+
     # Устанавливаем AppUserModelID для Windows (до создания QApplication)
     set_windows_appid()
-    
+
     app = QApplication(sys.argv)
     
     # Устанавливаем стиль приложения
@@ -498,5 +516,16 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    try:
+        main()
+    except Exception as e:
+        print("="*60)
+        print("КРИТИЧЕСКАЯ ОШИБКА!")
+        print(f"Тип ошибки: {type(e).__name__}")
+        print(f"Сообщение: {str(e)}")
+        print("="*60)
+        import traceback
+        traceback.print_exc()
+        input("Нажмите Enter для выхода...")
+        sys.exit(1)
 

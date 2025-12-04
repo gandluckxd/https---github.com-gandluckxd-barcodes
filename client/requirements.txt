@@ -3,4 +3,5 @@ requests==2.31.0
 gTTS==2.4.0
 pygame==2.5.2
 Pillow==10.1.0
+pyinstaller
 

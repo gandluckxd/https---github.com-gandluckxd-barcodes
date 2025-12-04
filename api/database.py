@@ -2,8 +2,26 @@
 Модуль для работы с базой данных Firebird
 """
 import fdb
+import os
+import sys
 from contextlib import contextmanager
 from config import settings
+
+# Явно указываем путь к fbclient.dll
+if hasattr(sys, '_MEIPASS'):
+    # Если запущено из PyInstaller
+    fbclient_path = os.path.join(sys._MEIPASS, 'fbclient.dll')
+else:
+    # Если запущено из исходников
+    fbclient_path = os.path.join(os.path.dirname(__file__), 'fbclient.dll')
+
+# Проверяем существование файла и устанавливаем путь
+if os.path.exists(fbclient_path):
+    fdb.load_api(fbclient_path)
+    print(f"✓ fbclient.dll загружена из: {fbclient_path}")
+else:
+    print(f"⚠ fbclient.dll не найдена по пути: {fbclient_path}")
+    print("  Попытка использовать системную библиотеку...")
 
 
 class Database:
@@ -22,14 +40,20 @@ class Database:
         """Контекстный менеджер для получения соединения с БД"""
         connection = None
         try:
+            # Для Firebird используем формат: host/port:database
+            dsn = f"{self.host}/{self.port}:{self.database}"
+
+            print(f"Подключение к БД с DSN: {dsn}")
+            print(f"Пользователь: {self.user}")
+            print(f"Пароль: {'*' * len(self.password)}")
+
             connection = fdb.connect(
-                host=self.host,
-                port=self.port,
-                database=self.database,
-                user=self.user,
+                dsn=dsn,
+                user=self.user.upper(),  # Firebird чувствителен к регистру
                 password=self.password,
                 charset=self.charset
             )
+            print("✓ Соединение установлено")
             yield connection
         except Exception as e:
             if connection:
