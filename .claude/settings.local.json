@@ -11,7 +11,9 @@
       "Bash(python -m py_compile:*)",
       "Bash(where:*)",
       "Bash(./venv/Scripts/python.exe -m py_compile api/main.py)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(timeout /t 3)"
     ],
     "deny": [],
     "ask": []

@@ -6,9 +6,7 @@ import os
 import requests
 import threading
 from datetime import datetime
-from gtts import gTTS
 import pygame
-import tempfile
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
@@ -76,82 +74,107 @@ def create_emoji_icon():
         return None
 
 
-class TTSWorker(QObject):
-    """Класс для работы с TTS в отдельном потоке (Google TTS)"""
-    
+class SoundPlayer(QObject):
+    """Класс для воспроизведения звуковых уведомлений"""
+
     def __init__(self):
         super().__init__()
         self.audio_available = False
+        self.sounds = {}
         self.init_engine()
 
     def init_engine(self):
-        """Инициализация TTS движка"""
+        """Инициализация pygame mixer и загрузка звуков"""
         try:
             # Пытаемся инициализировать pygame mixer с разными настройками
             try:
                 # Стандартная инициализация
                 pygame.mixer.init()
-                print("✓ Pygame mixer инициализирован успешно (стандартный режим)")
+                print("Pygame mixer инициализирован успешно (стандартный режим)")
                 self.audio_available = True
             except Exception as e:
-                print(f"⚠ Ошибка стандартной инициализации pygame mixer: {e}")
+                print(f"Ошибка стандартной инициализации pygame mixer: {e}")
                 try:
                     # Пробуем с явными параметрами (низкая частота)
                     pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
-                    print("✓ Pygame mixer инициализирован успешно (режим 22050Hz)")
+                    print("Pygame mixer инициализирован успешно (режим 22050Hz)")
                     self.audio_available = True
                 except Exception as e2:
-                    print(f"⚠ Ошибка инициализации с параметрами 22050Hz: {e2}")
+                    print(f"Ошибка инициализации с параметрами 22050Hz: {e2}")
                     try:
                         # Пробуем с минимальными параметрами (моно)
                         pygame.mixer.init(frequency=44100, size=-16, channels=1, buffer=4096)
-                        print("✓ Pygame mixer инициализирован успешно (режим 44100Hz mono)")
+                        print("Pygame mixer инициализирован успешно (режим 44100Hz mono)")
                         self.audio_available = True
                     except Exception as e3:
-                        print(f"❌ Не удалось инициализировать pygame mixer: {e3}")
-                        print("⚠ Голосовые уведомления будут отключены")
+                        print(f"Не удалось инициализировать pygame mixer: {e3}")
+                        print("Звуковые уведомления будут отключены")
                         self.audio_available = False
+
+            # Загружаем звуковые файлы
+            if self.audio_available:
+                self.load_sounds()
+
         except Exception as e:
-            print(f"❌ Критическая ошибка инициализации TTS: {e}")
+            print(f"Критическая ошибка инициализации звука: {e}")
             self.audio_available = False
 
-    def speak(self, text):
-        """Озвучить текст с помощью Google TTS"""
+    def load_sounds(self):
+        """Загрузка звуковых файлов"""
+        try:
+            # Определяем путь к папке sounds
+            if getattr(sys, 'frozen', False):
+                # Если приложение скомпилировано
+                base_path = sys._MEIPASS
+            else:
+                # Если запускается как скрипт
+                base_path = os.path.dirname(os.path.abspath(__file__))
+
+            sounds_dir = os.path.join(base_path, 'sounds')
+
+            # Загружаем звуки
+            sound_files = {
+                'success': 'success.mp3',
+                'already_approved': 'warning.mp3',
+                'error': 'error.mp3'
+            }
+
+            for sound_name, filename in sound_files.items():
+                sound_path = os.path.join(sounds_dir, filename)
+                if os.path.exists(sound_path):
+                    self.sounds[sound_name] = pygame.mixer.Sound(sound_path)
+                    print(f"Загружен звук: {sound_name} ({filename})")
+                else:
+                    print(f"Звуковой файл не найден: {sound_path}")
+
+            if not self.sounds:
+                print("Не удалось загрузить ни одного звукового файла")
+                self.audio_available = False
+
+        except Exception as e:
+            print(f"Ошибка загрузки звуков: {e}")
+            self.audio_available = False
+
+    def play_sound(self, sound_type):
+        """Воспроизвести звук определенного типа
+
+        Args:
+            sound_type: 'success', 'already_approved', или 'error'
+        """
         # Проверяем доступность аудио
         if not self.audio_available:
-            print(f"⚠ Аудио недоступно, пропускаем озвучивание: {text}")
+            print(f"Аудио недоступно, пропускаем воспроизведение: {sound_type}")
             return
 
-        temp_file = None
         try:
-            # Создаем временный файл для аудио
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.mp3') as fp:
-                temp_file = fp.name
-
-            # Генерируем речь через Google TTS
-            tts = gTTS(text=text, lang='ru', slow=False)
-            tts.save(temp_file)
-
-            # Воспроизводим звук
-            pygame.mixer.music.load(temp_file)
-            pygame.mixer.music.play()
-
-            # Ждем окончания воспроизведения
-            while pygame.mixer.music.get_busy():
-                pygame.time.Clock().tick(10)
-
+            if sound_type in self.sounds:
+                self.sounds[sound_type].play()
+            else:
+                print(f"Звук '{sound_type}' не найден")
         except Exception as e:
-            print(f"❌ Ошибка озвучивания: {e}")
+            print(f"Ошибка воспроизведения звука: {e}")
             # При ошибке отключаем аудио, чтобы не пытаться повторять
             self.audio_available = False
-        finally:
-            # Удаляем временный файл
-            if temp_file and os.path.exists(temp_file):
-                try:
-                    pygame.mixer.music.unload()
-                    os.remove(temp_file)
-                except Exception as e:
-                    print(f"⚠ Ошибка удаления временного файла: {e}")
 
 
 class BarcodeApp(QMainWindow):
@@ -162,10 +185,10 @@ class BarcodeApp(QMainWindow):
     
     def __init__(self):
         super().__init__()
-        
-        # TTS Worker
-        self.tts_worker = TTSWorker()
-        
+
+        # Sound Player
+        self.sound_player = SoundPlayer()
+
         # История сканирований
         self.scan_history = []
         
@@ -441,14 +464,20 @@ class BarcodeApp(QMainWindow):
             product_info=product_info,
             barcode=barcode
         )
-        
-        # Озвучиваем результат в отдельном потоке
-        if voice_message:
-            threading.Thread(
-                target=self.tts_worker.speak,
-                args=(voice_message,),
-                daemon=True
-            ).start()
+
+        # Воспроизводим соответствующий звук в отдельном потоке
+        if success:
+            sound_type = 'success'
+        elif "уже было отмечено готовым" in message.lower():
+            sound_type = 'already_approved'
+        else:
+            sound_type = 'error'
+
+        threading.Thread(
+            target=self.sound_player.play_sound,
+            args=(sound_type,),
+            daemon=True
+        ).start()
     
     def handle_error(self, error_message, barcode):
         """Обработка ошибки"""
@@ -461,11 +490,11 @@ class BarcodeApp(QMainWindow):
             product_info=None,
             barcode=barcode
         )
-        
-        # Озвучиваем ошибку
+
+        # Воспроизводим звук ошибки
         threading.Thread(
-            target=self.tts_worker.speak,
-            args=("Ошибка подключения к серверу",),
+            target=self.sound_player.play_sound,
+            args=('error',),
             daemon=True
         ).start()
     
