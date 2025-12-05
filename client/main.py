@@ -247,6 +247,8 @@ class BarcodeApp(QMainWindow):
         btn_font.setPointSize(27)
         btn_font.setBold(True)
         process_btn.setFont(btn_font)
+        # Отключаем возможность установки фокуса на кнопку
+        process_btn.setFocusPolicy(Qt.NoFocus)
         barcode_layout.addWidget(process_btn)
         
         main_layout.addWidget(barcode_group)
@@ -313,12 +315,19 @@ class BarcodeApp(QMainWindow):
         
         self.history_table.setAlternatingRowColors(True)
         self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        
+        # Отключаем возможность установки фокуса на таблицу
+        self.history_table.setFocusPolicy(Qt.NoFocus)
+
         history_layout.addWidget(self.history_table)
         
         main_layout.addWidget(history_group)
         
         # Устанавливаем фокус на поле ввода
+        self.barcode_input.setFocus()
+
+    def mousePressEvent(self, event):
+        """Обработка клика мыши - возвращаем фокус на поле ввода"""
+        super().mousePressEvent(event)
         self.barcode_input.setFocus()
     
     def get_stats_text(self):
@@ -501,12 +510,12 @@ class BarcodeApp(QMainWindow):
             self.history_table.setItem(0, 5, QTableWidgetItem(size_str))
 
             # Кол-во изделий в заказе (колонка 6)
-            total_items = product_info.get('total_items_in_order', 0)
-            self.history_table.setItem(0, 6, QTableWidgetItem(str(total_items) if total_items else "-"))
+            total_items = product_info.get('total_items_in_order')
+            self.history_table.setItem(0, 6, QTableWidgetItem(str(total_items) if total_items is not None else "-"))
 
             # Проведено изделий в заказе (колонка 7)
-            approved_items = product_info.get('approved_items_in_order', 0)
-            self.history_table.setItem(0, 7, QTableWidgetItem(str(approved_items) if approved_items else "-"))
+            approved_items = product_info.get('approved_items_in_order')
+            self.history_table.setItem(0, 7, QTableWidgetItem(str(approved_items) if approved_items is not None else "-"))
         else:
             self.history_table.setItem(0, 2, QTableWidgetItem("-"))
             self.history_table.setItem(0, 3, QTableWidgetItem("-"))
