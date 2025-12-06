@@ -13,7 +13,7 @@ from config import settings
 app = FastAPI(
     title="Barcode Approval API",
     description="API для приходования изделий по штрихкоду",
-    version="1.0.0"
+    version="1.1.0"  # Увеличена версия (добавлены поля total_items_in_order и approved_items_in_order)
 )
 
 # CORS middleware для возможности обращения с клиента
@@ -41,7 +41,8 @@ async def health_check():
 
         return HealthResponse(
             status="ok" if db_connected else "error",
-            database_connected=db_connected
+            database_connected=db_connected,
+            api_version=app.version
         )
     except Exception as e:
         print(f"✗ Ошибка подключения к БД: {type(e).__name__}: {e}")
@@ -50,7 +51,8 @@ async def health_check():
 
         return HealthResponse(
             status="error",
-            database_connected=False
+            database_connected=False,
+            api_version=app.version
         )
 
 
@@ -171,42 +173,69 @@ async def process_barcode(request: BarcodeRequest):
                 product_info=None
             )
         
-        # 4. Находим запись в CT_WHDETAIL по ORDERITEMSID изделия и ITEMNO
-        query_whdetail = """
-            SELECT 
-                w.CTWHDETAILID,
-                w.CTELEMENTSID,
-                w.ITEMNO,
-                w.ISAPPROVED,
-                w.USERAPPROVED,
-                w.DATEAPPROVED,
-                e.RNAME as ELEMENT_NAME,
-                e.WIDTH,
-                e.HEIGHT
-            FROM CT_WHDETAIL w
-            INNER JOIN CT_ELEMENTS e ON w.CTELEMENTSID = e.CTELEMENTSID
-            WHERE e.ORDERITEMSID = ? AND w.ITEMNO = ?
+        # 4. Находим ВСЕ модели для данного ORDERITEMSID
+        query_models = """
+            SELECT MODELID, MODELNO
+            FROM MODELS
+            WHERE ORDERITEMSID = ?
+            ORDER BY MODELNO
         """
-        
-        whdetail_result = db.execute_query(query_whdetail, (orderitems_id, item_number))
-        
-        if not whdetail_result:
+
+        models_result = db.execute_query(query_models, (orderitems_id,))
+
+        if not models_result:
+            return ApprovalResponse(
+                success=False,
+                message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
+                voice_message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
+                product_info=None
+            )
+
+        # 5. Для каждой модели находим CT_ELEMENTS и CT_WHDETAIL с нужным ITEMNO
+        whdetail_records = []
+        for model in models_result:
+            model_id = model['MODELID']
+
+            query_whdetail = """
+                SELECT
+                    w.CTWHDETAILID,
+                    w.CTELEMENTSID,
+                    w.ITEMNO,
+                    w.ISAPPROVED,
+                    w.USERAPPROVED,
+                    w.DATEAPPROVED,
+                    e.RNAME as ELEMENT_NAME,
+                    e.WIDTH,
+                    e.HEIGHT,
+                    e.MODELID
+                FROM CT_WHDETAIL w
+                INNER JOIN CT_ELEMENTS e ON w.CTELEMENTSID = e.CTELEMENTSID
+                WHERE e.MODELID = ? AND w.ITEMNO = ? AND e.CTTYPEELEMSID = 2
+            """
+
+            whdetail_result = db.execute_query(query_whdetail, (model_id, item_number))
+
+            if whdetail_result:
+                whdetail_records.extend(whdetail_result)
+
+        if not whdetail_records:
             return ApprovalResponse(
                 success=False,
                 message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
                 voice_message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
                 product_info=None
             )
-        
-        whdetail_data = whdetail_result[0]
-        ctwhdetail_id = whdetail_data['CTWHDETAILID']
-        is_approved = whdetail_data['ISAPPROVED']
+
+        # Берем данные из первой записи для информации
+        whdetail_data = whdetail_records[0]
         element_name = whdetail_data['ELEMENT_NAME'].strip() if whdetail_data['ELEMENT_NAME'] else None
         width = whdetail_data['WIDTH']
         height = whdetail_data['HEIGHT']
         
-        # 5. Проверяем, не приходовано ли уже
-        if is_approved == 1:
+        # 6. Проверяем, не приходованы ли уже ВСЕ записи
+        already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
+
+        if len(already_approved) == len(whdetail_records):
             date_approved = whdetail_data['DATEAPPROVED']
             date_str = ""
             if date_approved:
@@ -265,25 +294,32 @@ async def process_barcode(request: BarcodeRequest):
                 )
             )
         
-        # 6. Приходуем изделие - обновляем CT_WHDETAIL
-        update_query = """
-            UPDATE CT_WHDETAIL
-            SET ISAPPROVED = 1,
-                DATEAPPROVED = CURRENT_TIMESTAMP
-            WHERE CTWHDETAILID = ?
-        """
-        
-        rows_updated = db.execute_update(update_query, (ctwhdetail_id,))
+        # 7. Приходуем ВСЕ изделия - обновляем CT_WHDETAIL для всех моделей
+        total_updated = 0
+        for whdetail in whdetail_records:
+            # Пропускаем уже приходованные
+            if whdetail['ISAPPROVED'] == 1:
+                continue
 
-        if rows_updated == 0:
+            update_query = """
+                UPDATE CT_WHDETAIL
+                SET ISAPPROVED = 1,
+                    DATEAPPROVED = CURRENT_TIMESTAMP
+                WHERE CTWHDETAILID = ?
+            """
+
+            rows_updated = db.execute_update(update_query, (whdetail['CTWHDETAILID'],))
+            total_updated += rows_updated
+
+        if total_updated == 0:
             return ApprovalResponse(
                 success=False,
-                message="Не удалось обновить запись в базе данных",
+                message="Не удалось обновить записи в базе данных",
                 voice_message="Ошибка при обновлении базы данных",
                 product_info=None
             )
 
-        # 7. Получаем статистику по заказу (ПОСЛЕ проводки)
+        # 8. Получаем статистику по заказу (ПОСЛЕ проводки)
         order_id = product_data['ORDERID']
 
         # Запрос для получения общего количества изделий в заказе
@@ -317,12 +353,18 @@ async def process_barcode(request: BarcodeRequest):
         total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
         approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
 
-        # 8. Формируем успешный ответ
+        # 9. Формируем успешный ответ
+        models_count = len(models_result)
         voice_message = f"Изделие {construction_number} заказа {order_number} готово"
+
+        message = f"Успешно оприходовано {total_updated} изделие(й) из {models_count} модели(ей)"
+        if total_updated < len(whdetail_records):
+            already_count = len(whdetail_records) - total_updated
+            message += f" ({already_count} уже было приходовано ранее)"
 
         return ApprovalResponse(
             success=True,
-            message="Изделие успешно оприходовано",
+            message=message,
             voice_message=voice_message,
             product_info=ProductInfo(
                 order_number=order_number,

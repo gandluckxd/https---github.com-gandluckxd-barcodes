@@ -68,4 +68,5 @@ class HealthResponse(BaseModel):
     """Ответ на проверку здоровья сервиса"""
     status: str = Field(..., description="Статус сервиса")
     database_connected: bool = Field(..., description="Статус подключения к БД")
+    api_version: str = Field(..., description="Версия API")
 

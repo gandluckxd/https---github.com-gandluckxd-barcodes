@@ -373,6 +373,9 @@ class BarcodeApp(QMainWindow):
                 data = response.json()
                 print(f"Данные от API: {data}")
 
+                api_version = data.get('api_version', 'unknown')
+                print(f"Версия API: {api_version}")
+
                 if data.get('database_connected'):
                     self.connection_status.setText("🟢 Программа готова к работе")
                     self.connection_status.setStyleSheet("color: green;")
@@ -440,6 +443,14 @@ class BarcodeApp(QMainWindow):
         message = data.get('message', '')
         voice_message = data.get('voice_message', '')
         product_info = data.get('product_info')
+
+        # Диагностика: выводим полученные данные
+        print(f"DEBUG: Получен ответ от API:")
+        print(f"  success: {success}")
+        print(f"  product_info: {product_info}")
+        if product_info:
+            print(f"  total_items_in_order: {product_info.get('total_items_in_order')}")
+            print(f"  approved_items_in_order: {product_info.get('approved_items_in_order')}")
         
         if success:
             self.stats['success'] += 1

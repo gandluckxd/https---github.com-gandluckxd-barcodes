@@ -13,7 +13,8 @@
       "Bash(./venv/Scripts/python.exe -m py_compile api/main.py)",
       "Bash(dir:*)",
       "Bash(./venv/Scripts/python.exe:*)",
-      "Bash(timeout /t 3)"
+      "Bash(timeout /t 3)",
+      "Bash(taskkill:*)"
     ],
     "deny": [],
     "ask": []
