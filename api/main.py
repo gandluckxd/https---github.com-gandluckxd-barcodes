@@ -1,11 +1,15 @@
 """
 API сервер для системы учета готовности изделий
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import fdb
+from datetime import datetime, timedelta
 
-from models import BarcodeRequest, ApprovalResponse, ProductInfo, HealthResponse
+from models import (
+    BarcodeRequest, ApprovalResponse, ProductInfo, HealthResponse,
+    DailyStatsResponse, DailyStatsRow, OrderStatsResponse, OrderStatsRow
+)
 from database import db
 from config import settings
 
@@ -13,7 +17,7 @@ from config import settings
 app = FastAPI(
     title="Barcode Approval API",
     description="API для приходования изделий по штрихкоду",
-    version="1.1.0"  # Увеличена версия (добавлены поля total_items_in_order и approved_items_in_order)
+    version="1.2.0"  # Добавлены endpoints для статистики
 )
 
 # CORS middleware для возможности обращения с клиента
@@ -403,6 +407,254 @@ async def process_barcode(request: BarcodeRequest):
             message=f"Неизвестная ошибка: {str(e)}",
             voice_message="Неизвестная ошибка",
             product_info=None
+        )
+
+
+@app.get("/api/statistics/daily", response_model=DailyStatsResponse)
+async def get_daily_statistics(
+    start_date: str = Query(..., description="Начальная дата (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="Конечная дата (YYYY-MM-DD)")
+):
+    """
+    Получить общую статистику по дням
+
+    Возвращает запланированные и изготовленные изделия (ПВХ и раздвижки)
+    группированные по датам производства
+    """
+    try:
+        # Валидация дат
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            return DailyStatsResponse(
+                success=False,
+                message="Неверный формат даты. Используйте YYYY-MM-DD",
+                data=[]
+            )
+
+        if start_dt > end_dt:
+            return DailyStatsResponse(
+                success=False,
+                message="Начальная дата не может быть больше конечной",
+                data=[]
+            )
+
+        # Ограничение диапазона
+        delta = (end_dt - start_dt).days
+        if delta > 365:
+            return DailyStatsResponse(
+                success=False,
+                message="Диапазон не может превышать 1 год",
+                data=[]
+            )
+
+        # Объединенный SQL запрос
+        query = """
+            SELECT
+                o.proddate,
+                o.orderno,
+                o.rcomment,
+                SUM(CASE
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8
+                    THEN oi.qty ELSE 0
+                END) AS planned_pvh,
+                SUM(CASE
+                    WHEN (rs.systemtype = 1) OR (rs.rsystemid = 8)
+                    THEN oi.qty ELSE 0
+                END) AS planned_razdv,
+                SUM(CASE
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND wd.isapproved = 1
+                    THEN COALESCE(wd.qty, 0) ELSE 0
+                END) AS completed_pvh,
+                SUM(CASE
+                    WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
+                    THEN COALESCE(wd.qty, 0) ELSE 0
+                END) AS completed_razdv
+            FROM orders o
+            JOIN orderitems oi ON oi.orderid = o.orderid
+            JOIN models m ON m.orderitemsid = oi.orderitemsid
+            JOIN r_systems rs ON rs.rsystemid = m.sysprofid
+            LEFT JOIN ct_elements el ON el.modelid = m.modelid AND el.cttypeelemsid = 2
+            LEFT JOIN ct_whdetail wd ON wd.ctelementsid = el.ctelementsid
+            WHERE o.proddate BETWEEN ? AND ?
+            GROUP BY o.proddate, o.orderno, o.rcomment
+            ORDER BY o.proddate, o.orderno
+        """
+
+        results = db.execute_query(query, (start_date, end_date))
+
+        # Агрегация по датам
+        daily_dict = {}
+        for row in results:
+            proddate = row['PRODDATE']
+            if isinstance(proddate, datetime):
+                proddate = proddate.date().strftime('%Y-%m-%d')
+            elif hasattr(proddate, 'strftime'):
+                proddate = proddate.strftime('%Y-%m-%d')
+            else:
+                proddate = str(proddate)
+
+            if proddate not in daily_dict:
+                daily_dict[proddate] = {
+                    'planned_pvh': 0,
+                    'planned_razdv': 0,
+                    'completed_pvh': 0,
+                    'completed_razdv': 0
+                }
+
+            daily_dict[proddate]['planned_pvh'] += row.get('PLANNED_PVH', 0) or 0
+            daily_dict[proddate]['planned_razdv'] += row.get('PLANNED_RAZDV', 0) or 0
+            daily_dict[proddate]['completed_pvh'] += row.get('COMPLETED_PVH', 0) or 0
+            daily_dict[proddate]['completed_razdv'] += row.get('COMPLETED_RAZDV', 0) or 0
+
+        # Преобразование в список
+        daily_stats = [
+            DailyStatsRow(
+                proddate=date,
+                planned_pvh=stats['planned_pvh'],
+                planned_razdv=stats['planned_razdv'],
+                completed_pvh=stats['completed_pvh'],
+                completed_razdv=stats['completed_razdv']
+            )
+            for date, stats in sorted(daily_dict.items())
+        ]
+
+        return DailyStatsResponse(
+            success=True,
+            message=f"Статистика по {len(daily_stats)} дням успешно получена",
+            data=daily_stats
+        )
+
+    except fdb.DatabaseError as e:
+        return DailyStatsResponse(
+            success=False,
+            message=f"Ошибка базы данных: {str(e)}",
+            data=[]
+        )
+    except Exception as e:
+        return DailyStatsResponse(
+            success=False,
+            message=f"Неизвестная ошибка: {str(e)}",
+            data=[]
+        )
+
+
+@app.get("/api/statistics/orders", response_model=OrderStatsResponse)
+async def get_order_statistics(
+    start_date: str = Query(..., description="Начальная дата (YYYY-MM-DD)"),
+    end_date: str = Query(..., description="Конечная дата (YYYY-MM-DD)")
+):
+    """
+    Получить детальную статистику по заказам
+
+    Возвращает запланированные и изготовленные изделия (ПВХ и раздвижки)
+    группированные по заказам с комментариями
+    """
+    try:
+        # Валидация дат
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d')
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d')
+        except ValueError:
+            return OrderStatsResponse(
+                success=False,
+                message="Неверный формат даты. Используйте YYYY-MM-DD",
+                data=[]
+            )
+
+        if start_dt > end_dt:
+            return OrderStatsResponse(
+                success=False,
+                message="Начальная дата не может быть больше конечной",
+                data=[]
+            )
+
+        # Ограничение диапазона
+        delta = (end_dt - start_dt).days
+        if delta > 365:
+            return OrderStatsResponse(
+                success=False,
+                message="Диапазон не может превышать 1 год",
+                data=[]
+            )
+
+        # Объединенный SQL запрос (тот же что и для daily)
+        query = """
+            SELECT
+                o.proddate,
+                o.orderno,
+                o.rcomment,
+                SUM(CASE
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8
+                    THEN oi.qty ELSE 0
+                END) AS planned_pvh,
+                SUM(CASE
+                    WHEN (rs.systemtype = 1) OR (rs.rsystemid = 8)
+                    THEN oi.qty ELSE 0
+                END) AS planned_razdv,
+                SUM(CASE
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND wd.isapproved = 1
+                    THEN COALESCE(wd.qty, 0) ELSE 0
+                END) AS completed_pvh,
+                SUM(CASE
+                    WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
+                    THEN COALESCE(wd.qty, 0) ELSE 0
+                END) AS completed_razdv
+            FROM orders o
+            JOIN orderitems oi ON oi.orderid = o.orderid
+            JOIN models m ON m.orderitemsid = oi.orderitemsid
+            JOIN r_systems rs ON rs.rsystemid = m.sysprofid
+            LEFT JOIN ct_elements el ON el.modelid = m.modelid AND el.cttypeelemsid = 2
+            LEFT JOIN ct_whdetail wd ON wd.ctelementsid = el.ctelementsid
+            WHERE o.proddate BETWEEN ? AND ?
+            GROUP BY o.proddate, o.orderno, o.rcomment
+            ORDER BY o.proddate, o.orderno
+        """
+
+        results = db.execute_query(query, (start_date, end_date))
+
+        # Преобразование результатов
+        order_stats = []
+        for row in results:
+            proddate = row['PRODDATE']
+            if isinstance(proddate, datetime):
+                proddate = proddate.date().strftime('%Y-%m-%d')
+            elif hasattr(proddate, 'strftime'):
+                proddate = proddate.strftime('%Y-%m-%d')
+            else:
+                proddate = str(proddate)
+
+            orderno = row['ORDERNO'].strip() if row['ORDERNO'] else ""
+            rcomment = row['RCOMMENT'].strip() if row['RCOMMENT'] else None
+
+            order_stats.append(OrderStatsRow(
+                order_number=orderno,
+                proddate=proddate,
+                planned_pvh=row.get('PLANNED_PVH', 0) or 0,
+                planned_razdv=row.get('PLANNED_RAZDV', 0) or 0,
+                completed_pvh=row.get('COMPLETED_PVH', 0) or 0,
+                completed_razdv=row.get('COMPLETED_RAZDV', 0) or 0,
+                comment=rcomment
+            ))
+
+        return OrderStatsResponse(
+            success=True,
+            message=f"Статистика по {len(order_stats)} заказам успешно получена",
+            data=order_stats
+        )
+
+    except fdb.DatabaseError as e:
+        return OrderStatsResponse(
+            success=False,
+            message=f"Ошибка базы данных: {str(e)}",
+            data=[]
+        )
+    except Exception as e:
+        return OrderStatsResponse(
+            success=False,
+            message=f"Неизвестная ошибка: {str(e)}",
+            data=[]
         )
 
 

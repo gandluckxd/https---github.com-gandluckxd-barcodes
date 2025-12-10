@@ -18,9 +18,9 @@ else:
 # Проверяем существование файла и устанавливаем путь
 if os.path.exists(fbclient_path):
     fdb.load_api(fbclient_path)
-    print(f"✓ fbclient.dll загружена из: {fbclient_path}")
+    print(f"[OK] fbclient.dll загружена из: {fbclient_path}")
 else:
-    print(f"⚠ fbclient.dll не найдена по пути: {fbclient_path}")
+    print(f"[WARNING] fbclient.dll не найдена по пути: {fbclient_path}")
     print("  Попытка использовать системную библиотеку...")
 
 

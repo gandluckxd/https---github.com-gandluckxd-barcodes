@@ -70,3 +70,38 @@ class HealthResponse(BaseModel):
     database_connected: bool = Field(..., description="Статус подключения к БД")
     api_version: str = Field(..., description="Версия API")
 
+
+# === Модели для статистики ===
+
+class DailyStatsRow(BaseModel):
+    """Строка статистики по дню"""
+    proddate: str = Field(..., description="Дата производства")
+    planned_pvh: int = Field(0, description="Запланировано изделий ПВХ")
+    planned_razdv: int = Field(0, description="Запланировано изделий раздвижки")
+    completed_pvh: int = Field(0, description="Изготовлено изделий ПВХ (ISAPPROVED=1)")
+    completed_razdv: int = Field(0, description="Изготовлено изделий раздвижки (ISAPPROVED=1)")
+
+
+class DailyStatsResponse(BaseModel):
+    """Ответ со статистикой по дням"""
+    success: bool = Field(..., description="Успешность операции")
+    message: str = Field(..., description="Сообщение")
+    data: list[DailyStatsRow] = Field(default_factory=list, description="Данные статистики")
+
+
+class OrderStatsRow(BaseModel):
+    """Строка статистики по заказу"""
+    order_number: str = Field(..., description="Номер заказа")
+    proddate: str = Field(..., description="Дата производства")
+    planned_pvh: int = Field(0, description="Количество изделий ПВХ")
+    planned_razdv: int = Field(0, description="Количество изделий раздвижки")
+    completed_pvh: int = Field(0, description="Готовых изделий ПВХ (ISAPPROVED=1)")
+    completed_razdv: int = Field(0, description="Готовых изделий раздвижки (ISAPPROVED=1)")
+    comment: Optional[str] = Field(None, description="Комментарий из ORDERS.RCOMMENT")
+
+
+class OrderStatsResponse(BaseModel):
+    """Ответ со статистикой по заказам"""
+    success: bool = Field(..., description="Успешность операции")
+    message: str = Field(..., description="Сообщение")
+    data: list[OrderStatsRow] = Field(default_factory=list, description="Данные статистики")

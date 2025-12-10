@@ -5,12 +5,12 @@ import sys
 import os
 import requests
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import pygame
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
-    QGroupBox, QHeaderView
+    QGroupBox, QHeaderView, QTabWidget, QMessageBox
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QImage
@@ -179,10 +179,12 @@ class SoundPlayer(QObject):
 
 class BarcodeApp(QMainWindow):
     """Главное окно приложения"""
-    
+
     # Сигнал для обновления UI из другого потока
     update_ui_signal = pyqtSignal(str)
-    
+    # Сигнал для обновления таблиц статистики
+    update_stats_tables_signal = pyqtSignal(list, list)
+
     def __init__(self):
         super().__init__()
 
@@ -191,7 +193,7 @@ class BarcodeApp(QMainWindow):
 
         # История сканирований
         self.scan_history = []
-        
+
         # Статистика
         self.stats = {
             'total': 0,
@@ -199,25 +201,64 @@ class BarcodeApp(QMainWindow):
             'failed': 0,
             'already_approved': 0
         }
-        
+
+        # Данные статистики
+        self.daily_stats_data = []
+        self.order_stats_data = []
+        self.last_stats_update = None
+        self.stats_loading = False
+
         self.init_ui()
-        
+
+        # Подключаем сигнал для обновления таблиц
+        self.update_stats_tables_signal.connect(self.update_stats_tables)
+
         # Проверка подключения к API при старте
         QTimer.singleShot(500, self.check_api_connection)
+
+        # Запускаем загрузку статистики в фоне сразу после старта
+        QTimer.singleShot(1000, self.start_background_stats_loading)
+
+        # Настраиваем таймер для автоматического обновления статистики каждые 5 минут
+        self.stats_timer = QTimer()
+        self.stats_timer.timeout.connect(self.start_background_stats_loading)
+        self.stats_timer.start(5 * 60 * 1000)  # 5 минут в миллисекундах
     
     def init_ui(self):
-        """Инициализация UI"""
+        """Инициализация UI с вкладками"""
         self.setWindowTitle(config.WINDOW_TITLE)
         self.setGeometry(100, 100, config.WINDOW_WIDTH, config.WINDOW_HEIGHT)
-        
-        # Центральный виджет
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        
-        # Основной layout
+
+        # Создаем QTabWidget
+        self.tabs = QTabWidget()
+        self.setCentralWidget(self.tabs)
+
+        # Настройка шрифта для вкладок
+        tab_font = QFont()
+        tab_font.setPointSize(18)
+        tab_font.setBold(True)
+        self.tabs.setFont(tab_font)
+
+        # Создаем вкладки
+        main_tab = self.create_main_tab()
+        stats_tab = self.create_stats_tab()
+
+        # Добавляем вкладки
+        self.tabs.addTab(main_tab, "Главное меню")
+        self.tabs.addTab(stats_tab, "Статистика")
+
+        # Подключаем обработчик переключения вкладок
+        self.tabs.currentChanged.connect(self.on_tab_changed)
+
+        # Устанавливаем фокус на поле ввода
+        self.barcode_input.setFocus()
+
+    def create_main_tab(self):
+        """Создание главной вкладки с основным функционалом"""
+        tab = QWidget()
         main_layout = QVBoxLayout()
-        central_widget.setLayout(main_layout)
-        
+        tab.setLayout(main_layout)
+
         # === Заголовок ===
         title_label = QLabel("📦 Система учета готовности изделий")
         title_font = QFont()
@@ -226,7 +267,7 @@ class BarcodeApp(QMainWindow):
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title_label)
-        
+
         # === Статус подключения ===
         self.connection_status = QLabel("🔴 Проверка подключения...")
         self.connection_status.setAlignment(Qt.AlignCenter)
@@ -235,7 +276,7 @@ class BarcodeApp(QMainWindow):
         status_font.setBold(True)
         self.connection_status.setFont(status_font)
         main_layout.addWidget(self.connection_status)
-        
+
         # === Ввод штрихкода ===
         barcode_group = QGroupBox("Ввод штрихкода")
         group_font = QFont()
@@ -273,9 +314,9 @@ class BarcodeApp(QMainWindow):
         # Отключаем возможность установки фокуса на кнопку
         process_btn.setFocusPolicy(Qt.NoFocus)
         barcode_layout.addWidget(process_btn)
-        
+
         main_layout.addWidget(barcode_group)
-        
+
         # === Статистика ===
         stats_group = QGroupBox("Статистика")
         stats_group_font = QFont()
@@ -292,9 +333,9 @@ class BarcodeApp(QMainWindow):
         stats_font.setBold(True)
         self.stats_label.setFont(stats_font)
         stats_layout.addWidget(self.stats_label)
-        
+
         main_layout.addWidget(stats_group)
-        
+
         # === История сканирований ===
         history_group = QGroupBox("История сканирований")
         history_group_font = QFont()
@@ -321,7 +362,7 @@ class BarcodeApp(QMainWindow):
         header_font.setPointSize(21)
         header_font.setBold(True)
         header.setFont(header_font)
-        
+
         # Настройка таблицы - автоматическое определение ширины для всех колонок
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Статус
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Штрихкод
@@ -332,21 +373,353 @@ class BarcodeApp(QMainWindow):
         header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Кол-во в заказе
         header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Кол-во готово
         header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Время
-        
+
         # Увеличиваем высоту строк
         self.history_table.verticalHeader().setDefaultSectionSize(60)
-        
+
         self.history_table.setAlternatingRowColors(True)
         self.history_table.setEditTriggers(QTableWidget.NoEditTriggers)
         # Отключаем возможность установки фокуса на таблицу
         self.history_table.setFocusPolicy(Qt.NoFocus)
 
         history_layout.addWidget(self.history_table)
-        
+
         main_layout.addWidget(history_group)
-        
-        # Устанавливаем фокус на поле ввода
-        self.barcode_input.setFocus()
+
+        return tab
+
+    def create_stats_tab(self):
+        """Создание вкладки со статистикой производства"""
+        tab = QWidget()
+        main_layout = QVBoxLayout()
+        tab.setLayout(main_layout)
+
+        # === Заголовок ===
+        title_label = QLabel("📊 Статистика производства")
+        title_font = QFont()
+        title_font.setPointSize(36)
+        title_font.setBold(True)
+        title_label.setFont(title_font)
+        title_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(title_label)
+
+        # === Информация о периоде ===
+        period_label = QLabel("Отображается период: 2 дня назад - 5 дней вперёд")
+        period_font = QFont()
+        period_font.setPointSize(18)
+        period_label.setFont(period_font)
+        period_label.setAlignment(Qt.AlignCenter)
+        main_layout.addWidget(period_label)
+
+        # === Метка последнего обновления ===
+        self.last_update_label = QLabel("Загрузка данных...")
+        update_font = QFont()
+        update_font.setPointSize(16)
+        update_font.setItalic(True)
+        self.last_update_label.setFont(update_font)
+        self.last_update_label.setAlignment(Qt.AlignCenter)
+        self.last_update_label.setStyleSheet("color: gray;")
+        main_layout.addWidget(self.last_update_label)
+
+        # === Кнопка обновления ===
+        refresh_btn = QPushButton("🔄 Обновить статистику")
+        refresh_btn.clicked.connect(self.start_background_stats_loading)
+        refresh_btn.setMinimumHeight(60)
+        btn_font = QFont()
+        btn_font.setPointSize(20)
+        btn_font.setBold(True)
+        refresh_btn.setFont(btn_font)
+        refresh_btn.setFocusPolicy(Qt.NoFocus)
+        main_layout.addWidget(refresh_btn)
+
+        # === Общая статистика по дням ===
+        daily_group = QGroupBox("Общая статистика по дням")
+        daily_group_font = QFont()
+        daily_group_font.setPointSize(22)
+        daily_group_font.setBold(True)
+        daily_group.setFont(daily_group_font)
+        daily_layout = QVBoxLayout()
+        daily_group.setLayout(daily_layout)
+
+        self.daily_stats_table = QTableWidget()
+        self.daily_stats_table.setColumnCount(7)
+        self.daily_stats_table.setHorizontalHeaderLabels([
+            "Дата", "План ПВХ", "Сделано ПВХ", "План Раздвижки", "Сделано Раздвижки", "План Итого", "Сделано Итого"
+        ])
+
+        # Настройка шрифтов таблицы
+        table_font = QFont()
+        table_font.setPointSize(17)
+        self.daily_stats_table.setFont(table_font)
+
+        header = self.daily_stats_table.horizontalHeader()
+        header_font = QFont()
+        header_font.setPointSize(19)
+        header_font.setBold(True)
+        header.setFont(header_font)
+
+        # Автоматический размер колонок
+        for i in range(7):
+            header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+
+        self.daily_stats_table.verticalHeader().setDefaultSectionSize(55)
+        self.daily_stats_table.setAlternatingRowColors(True)
+        self.daily_stats_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.daily_stats_table.setFocusPolicy(Qt.NoFocus)
+
+        daily_layout.addWidget(self.daily_stats_table)
+        main_layout.addWidget(daily_group)
+
+        # === Детальная статистика по заказам ===
+        order_group = QGroupBox("Детальная статистика по заказам")
+        order_group_font = QFont()
+        order_group_font.setPointSize(22)
+        order_group_font.setBold(True)
+        order_group.setFont(order_group_font)
+        order_layout = QVBoxLayout()
+        order_group.setLayout(order_layout)
+
+        self.order_stats_table = QTableWidget()
+        self.order_stats_table.setColumnCount(7)
+        self.order_stats_table.setHorizontalHeaderLabels([
+            "Номер заказа", "Дата производства", "План ПВХ", "Сделано ПВХ",
+            "План Раздвижки", "Сделано Раздвижки", "Комментарий"
+        ])
+
+        # Настройка шрифтов таблицы
+        self.order_stats_table.setFont(table_font)
+
+        header2 = self.order_stats_table.horizontalHeader()
+        header2.setFont(header_font)
+
+        # Автоматический размер колонок
+        for i in range(7):
+            header2.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+
+        self.order_stats_table.verticalHeader().setDefaultSectionSize(55)
+        self.order_stats_table.setAlternatingRowColors(True)
+        self.order_stats_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.order_stats_table.setFocusPolicy(Qt.NoFocus)
+
+        order_layout.addWidget(self.order_stats_table)
+        main_layout.addWidget(order_group)
+
+        return tab
+
+    def on_tab_changed(self, index):
+        """Обработчик переключения вкладок"""
+        if index == 1:  # Вкладка "Статистика"
+            # Принудительно обновляем таблицы из кеша
+            self.update_stats_tables(self.daily_stats_data, self.order_stats_data)
+        elif index == 0:  # Вкладка "Главное меню"
+            self.barcode_input.setFocus()
+
+    def start_background_stats_loading(self):
+        """Запуск фоновой загрузки статистики"""
+        if self.stats_loading:
+            print("Загрузка статистики уже выполняется, пропускаем...")
+            return
+
+        self.stats_loading = True
+
+        # Обновляем метку сразу же
+        self.last_update_label.setText("Идет загрузка данных...")
+        self.last_update_label.setStyleSheet("color: orange;")
+
+        # Запускаем загрузку в отдельном потоке
+        thread = threading.Thread(target=self.load_statistics_background, daemon=True)
+        thread.start()
+
+    def load_statistics_background(self):
+        """Загрузка статистики в фоновом режиме"""
+        try:
+            # Рассчитываем даты: 2 дня назад - 5 дней вперёд
+            today = datetime.now()
+            start_date = (today - timedelta(days=2)).strftime('%Y-%m-%d')
+            end_date = (today + timedelta(days=5)).strftime('%Y-%m-%d')
+
+            # Загрузка общей статистики по дням
+            daily_url = f"{config.API_BASE_URL}{config.API_DAILY_STATS_ENDPOINT}"
+            daily_params = {'start_date': start_date, 'end_date': end_date}
+
+            daily_response = requests.get(daily_url, params=daily_params, timeout=10)
+            daily_data = []
+            if daily_response.status_code == 200:
+                daily_json = daily_response.json()
+                if daily_json.get('success'):
+                    daily_data = daily_json.get('data', [])
+
+            # Загрузка детальной статистики по заказам
+            order_url = f"{config.API_BASE_URL}{config.API_ORDER_STATS_ENDPOINT}"
+            order_params = {'start_date': start_date, 'end_date': end_date}
+
+            order_response = requests.get(order_url, params=order_params, timeout=10)
+            order_data = []
+            if order_response.status_code == 200:
+                order_json = order_response.json()
+                if order_json.get('success'):
+                    order_data = order_json.get('data', [])
+
+            # Сохраняем данные и время обновления
+            self.daily_stats_data = daily_data
+            self.order_stats_data = order_data
+            self.last_stats_update = datetime.now()
+
+            # Отправляем сигнал для обновления UI
+            self.update_stats_tables_signal.emit(daily_data, order_data)
+
+        except Exception as e:
+            print(f"Ошибка фоновой загрузки статистики: {e}")
+        finally:
+            self.stats_loading = False
+
+    def update_stats_tables(self, daily_data, order_data):
+        """Обновление таблиц статистики в главном потоке"""
+        # Обновляем метку последнего обновления
+        if self.last_stats_update:
+            time_str = self.last_stats_update.strftime('%d.%m.%Y %H:%M:%S')
+            self.last_update_label.setText(f"Последнее обновление: {time_str}")
+            self.last_update_label.setStyleSheet("color: green;")
+        elif self.stats_loading:
+            self.last_update_label.setText("Загрузка данных...")
+            self.last_update_label.setStyleSheet("color: orange;")
+        else:
+            self.last_update_label.setText("Данные не загружены")
+            self.last_update_label.setStyleSheet("color: gray;")
+
+        # Заполняем таблицы
+        self.populate_daily_stats_table(daily_data)
+        self.populate_order_stats_table(order_data)
+
+    def populate_daily_stats_table(self, data):
+        """Заполнение таблицы общей статистики"""
+        self.daily_stats_table.setRowCount(0)
+
+        for row_data in data:
+            row_position = self.daily_stats_table.rowCount()
+            self.daily_stats_table.insertRow(row_position)
+
+            # Дата (форматируем в день.месяц.год)
+            proddate = row_data['proddate']
+            try:
+                # Пробуем распарсить дату
+                if isinstance(proddate, str):
+                    date_obj = datetime.strptime(proddate, '%Y-%m-%d')
+                    formatted_date = date_obj.strftime('%d.%m.%Y')
+                else:
+                    formatted_date = proddate
+            except:
+                formatted_date = proddate
+
+            self.daily_stats_table.setItem(row_position, 0, QTableWidgetItem(formatted_date))
+
+            # План ПВХ (колонка 1)
+            planned_pvh = row_data['planned_pvh']
+            self.daily_stats_table.setItem(row_position, 1, QTableWidgetItem(str(planned_pvh)))
+
+            # Сделано ПВХ (колонка 2) с цветовой индикацией
+            completed_pvh = row_data['completed_pvh']
+            completed_pvh_item = QTableWidgetItem(str(completed_pvh))
+            if planned_pvh > 0:
+                if completed_pvh >= planned_pvh:
+                    completed_pvh_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif completed_pvh > 0:
+                    completed_pvh_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.daily_stats_table.setItem(row_position, 2, completed_pvh_item)
+
+            # План Раздвижки (колонка 3)
+            planned_razdv = row_data['planned_razdv']
+            self.daily_stats_table.setItem(row_position, 3, QTableWidgetItem(str(planned_razdv)))
+
+            # Сделано Раздвижки (колонка 4) с цветовой индикацией
+            completed_razdv = row_data['completed_razdv']
+            completed_razdv_item = QTableWidgetItem(str(completed_razdv))
+            if planned_razdv > 0:
+                if completed_razdv >= planned_razdv:
+                    completed_razdv_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif completed_razdv > 0:
+                    completed_razdv_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.daily_stats_table.setItem(row_position, 4, completed_razdv_item)
+
+            # Итого План (колонка 5) - сумма ПВХ и Раздвижки
+            total_planned = planned_pvh + planned_razdv
+            self.daily_stats_table.setItem(row_position, 5, QTableWidgetItem(str(total_planned)))
+
+            # Итого Сделано (колонка 6) - сумма ПВХ и Раздвижки с цветовой индикацией
+            total_completed = completed_pvh + completed_razdv
+            total_completed_item = QTableWidgetItem(str(total_completed))
+            if total_planned > 0:
+                if total_completed >= total_planned:
+                    total_completed_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif total_completed > 0:
+                    total_completed_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.daily_stats_table.setItem(row_position, 6, total_completed_item)
+
+    def populate_order_stats_table(self, data):
+        """Заполнение таблицы детальной статистики"""
+        self.order_stats_table.setRowCount(0)
+
+        for row_data in data:
+            row_position = self.order_stats_table.rowCount()
+            self.order_stats_table.insertRow(row_position)
+
+            # Номер заказа (колонка 0)
+            self.order_stats_table.setItem(row_position, 0, QTableWidgetItem(row_data['order_number']))
+
+            # Дата производства (колонка 1) - форматируем в день.месяц.год
+            proddate = row_data['proddate']
+            try:
+                if isinstance(proddate, str):
+                    date_obj = datetime.strptime(proddate, '%Y-%m-%d')
+                    formatted_date = date_obj.strftime('%d.%m.%Y')
+                else:
+                    formatted_date = proddate
+            except:
+                formatted_date = proddate
+            self.order_stats_table.setItem(row_position, 1, QTableWidgetItem(formatted_date))
+
+            # План ПВХ (колонка 2)
+            self.order_stats_table.setItem(row_position, 2, QTableWidgetItem(str(row_data['planned_pvh'])))
+
+            # Сделано ПВХ (колонка 3) с цветовой индикацией
+            completed_pvh_item = QTableWidgetItem(str(row_data['completed_pvh']))
+            if row_data['planned_pvh'] > 0:
+                if row_data['completed_pvh'] >= row_data['planned_pvh']:
+                    completed_pvh_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif row_data['completed_pvh'] > 0:
+                    completed_pvh_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.order_stats_table.setItem(row_position, 3, completed_pvh_item)
+
+            # План Раздвижки (колонка 4)
+            self.order_stats_table.setItem(row_position, 4, QTableWidgetItem(str(row_data['planned_razdv'])))
+
+            # Сделано Раздвижки (колонка 5) с цветовой индикацией
+            completed_razdv_item = QTableWidgetItem(str(row_data['completed_razdv']))
+            if row_data['planned_razdv'] > 0:
+                if row_data['completed_razdv'] >= row_data['planned_razdv']:
+                    completed_razdv_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif row_data['completed_razdv'] > 0:
+                    completed_razdv_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.order_stats_table.setItem(row_position, 5, completed_razdv_item)
+
+            # Комментарий (колонка 6)
+            comment = row_data.get('comment', '') or ''
+            self.order_stats_table.setItem(row_position, 6, QTableWidgetItem(comment.strip()))
+
+    def show_error(self, title, message):
+        """Показать диалог с ошибкой"""
+        msg_box = QMessageBox()
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle(title)
+        msg_box.setText(message)
+
+        # Устанавливаем шрифт
+        font = QFont()
+        font.setFamily("Arial")
+        font.setPointSize(14)
+        msg_box.setFont(font)
+
+        msg_box.exec_()
 
     def mousePressEvent(self, event):
         """Обработка клика мыши - возвращаем фокус на поле ввода"""
