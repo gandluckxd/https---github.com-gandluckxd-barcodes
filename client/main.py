@@ -904,13 +904,20 @@ class BarcodeApp(QMainWindow):
 
         if product_info:
             # Заказ (колонка 2)
-            self.history_table.setItem(0, 2, QTableWidgetItem(product_info.get('order_number', '')))
+            order_num = product_info.get('order_number') or '-'
+            self.history_table.setItem(0, 2, QTableWidgetItem(order_num))
 
             # Изделие (колонка 3)
-            self.history_table.setItem(0, 3, QTableWidgetItem(product_info.get('construction_number', '')))
+            construction_num = product_info.get('construction_number') or '-'
+            self.history_table.setItem(0, 3, QTableWidgetItem(construction_num))
 
             # Номер № (колонка 4)
-            item_num = f"{product_info.get('item_number', '')} / {product_info.get('qty', '')}"
+            item_number = product_info.get('item_number')
+            qty = product_info.get('qty')
+            if item_number is not None and qty is not None:
+                item_num = f"{item_number} / {qty}"
+            else:
+                item_num = "-"
             self.history_table.setItem(0, 4, QTableWidgetItem(item_num))
 
             # Размеры (колонка 5)

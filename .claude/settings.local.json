@@ -35,7 +35,8 @@
       "Bash(cd:*)",
       "Bash(d:\\barcodes\\api\\venv\\Scripts\\python.exe -c:*)",
       "Bash(.venvScriptspython.exe -m py_compile main.py)",
-      "Bash(d:\\barcodes\\api\\venv\\Scripts\\python.exe -m py_compile:*)"
+      "Bash(d:\\barcodes\\api\\venv\\Scripts\\python.exe -m py_compile:*)",
+      "Bash(ls:*)"
     ],
     "deny": [],
     "ask": []
