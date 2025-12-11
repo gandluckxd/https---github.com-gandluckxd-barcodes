@@ -125,7 +125,21 @@ async def process_order_barcode(barcode: str) -> ApprovalResponse:
             success=True,
             message=f"Заказ {order_number} успешно отгружен!",
             voice_message=f"Заказ {order_number} отгружен",
-            product_info=None
+            product_info=ProductInfo(
+                order_number=order_number,
+                construction_number=None,
+                item_number=None,
+                orderitems_id=None,
+                orderitems_name=None,
+                qty=None,
+                element_name=None,
+                width=None,
+                height=None,
+                glass_orderitems_id=None,
+                order_id=order_id,
+                total_items_in_order=None,
+                approved_items_in_order=None
+            )
         )
 
     except Exception as e:
