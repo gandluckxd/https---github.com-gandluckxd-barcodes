@@ -53,7 +53,7 @@ class Database:
                 password=self.password,
                 charset=self.charset
             )
-            print("✓ Соединение установлено")
+            print("[OK] Соединение установлено")
             yield connection
         except Exception as e:
             if connection:

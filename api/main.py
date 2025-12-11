@@ -30,6 +30,114 @@ app.add_middleware(
 )
 
 
+async def process_order_barcode(barcode: str) -> ApprovalResponse:
+    """
+    Обработка штрихкода заказа для перевода в статус "Отгружен"
+
+    Args:
+        barcode: ORDERID заказа
+
+    Returns:
+        ApprovalResponse с результатом операции
+    """
+    try:
+        order_id = int(barcode)
+    except ValueError:
+        return ApprovalResponse(
+            success=False,
+            message=f"Некорректный штрихкод заказа: {barcode}",
+            voice_message="Ошибка. Некорректный штрихкод заказа",
+            product_info=None
+        )
+
+    # Проверяем существование заказа и его текущий статус
+    query_order = """
+        SELECT
+            o.ORDERID,
+            o.ORDERNO,
+            o.ORDERSTATEID,
+            os.NAME as STATE_NAME
+        FROM ORDERS o
+        LEFT JOIN ORDERSTATES os ON os.ORDERSTATEID = o.ORDERSTATEID
+        WHERE o.ORDERID = ?
+    """
+
+    order_result = db.execute_query(query_order, (order_id,))
+
+    if not order_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Заказ с ID {order_id} не найден",
+            voice_message="Заказ не найден",
+            product_info=None
+        )
+
+    order_data = order_result[0]
+    order_number = order_data['ORDERNO'].strip() if order_data['ORDERNO'] else "?"
+    current_state_id = order_data['ORDERSTATEID']
+    current_state_name = order_data['STATE_NAME'].strip() if order_data['STATE_NAME'] else "Неизвестно"
+
+    # Проверяем, что заказ в статусе "Готов" (ID=4)
+    if current_state_id != 4:
+        return ApprovalResponse(
+            success=False,
+            message=f"Заказ {order_number} в статусе '{current_state_name}'. Можно отгружать только заказы со статусом 'Готов'",
+            voice_message=f"Ошибка. Заказ {order_number} не готов к отгрузке",
+            product_info=None
+        )
+
+    # Переводим заказ в статус "Отгружен" (ID=5)
+    try:
+        # Получаем следующий ID для ORDERSTATESREG
+        get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
+        next_id_result = db.execute_query(get_next_id_query)
+        next_id = (next_id_result[0]['MAXID'] or 0) + 1
+
+        # Получаем максимальную позицию состояния для данного заказа
+        get_max_posit_query = """
+            SELECT MAX(stateposit) as MAXPOSIT
+            FROM orderstatesreg
+            WHERE orderid = ?
+        """
+        max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
+        next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
+
+        # Добавляем запись в ORDERSTATESREG
+        # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
+        insert_state_query = """
+            INSERT INTO orderstatesreg
+            (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+            VALUES (?, ?, 5, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса "Отгружен" после сканирования штрихкода заказа')
+        """
+        db.execute_update(insert_state_query, (next_id, order_id, next_posit))
+
+        # Обновляем состояние заказа
+        update_order_state_query = """
+            UPDATE orders
+            SET orderstateid = 5
+            WHERE orderid = ?
+        """
+        db.execute_update(update_order_state_query, (order_id,))
+
+        print(f"[OK] Заказ {order_number} (ID={order_id}) переведен в статус 'Отгружен'")
+
+        return ApprovalResponse(
+            success=True,
+            message=f"Заказ {order_number} успешно отгружен!",
+            voice_message=f"Заказ {order_number} отгружен",
+            product_info=None
+        )
+
+    except Exception as e:
+        print(f"[ERROR] Ошибка при установке статуса 'Отгружен' для заказа {order_number}: {e}")
+        return ApprovalResponse(
+            success=False,
+            message=f"Ошибка при отгрузке заказа: {str(e)}",
+            voice_message="Ошибка при отгрузке заказа",
+            product_info=None
+        )
+
+
 @app.get("/", response_model=HealthResponse)
 async def health_check():
     """Проверка работоспособности API и подключения к БД"""
@@ -41,7 +149,7 @@ async def health_check():
         result = db.execute_query("SELECT 1 FROM RDB$DATABASE")
         db_connected = len(result) > 0
 
-        print(f"✓ Подключение к БД успешно, результат: {result}")
+        print(f"[OK] Подключение к БД успешно, результат: {result}")
 
         return HealthResponse(
             status="ok" if db_connected else "error",
@@ -49,7 +157,7 @@ async def health_check():
             api_version=app.version
         )
     except Exception as e:
-        print(f"✗ Ошибка подключения к БД: {type(e).__name__}: {e}")
+        print(f"[ERROR] Ошибка подключения к БД: {type(e).__name__}: {e}")
         import traceback
         traceback.print_exc()
 
@@ -64,14 +172,18 @@ async def health_check():
 async def process_barcode(request: BarcodeRequest):
     """
     Обработка штрихкода и приходование изделия
-    
-    Формат штрихкода: [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
-    - Первые 2 цифры - номер изделия (01, 02, ... 15...)
-    - Остальные 7 цифр - ORDERITEMSID стеклопакета (заполнения)
+
+    Форматы штрихкода:
+    1. Штрихкод изделия (9 цифр): [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
+       - Первые 2 цифры - номер изделия (01, 02, ... 15...)
+       - Остальные 7 цифр - ORDERITEMSID стеклопакета (заполнения)
+
+    2. Штрихкод заказа (не 9 цифр): ORDERID заказа
+       - Переводит заказ из статуса "Готов" в статус "Отгружен"
     """
     try:
         barcode = request.barcode.strip()
-        
+
         # Валидация штрихкода
         if not barcode or not barcode.isdigit():
             return ApprovalResponse(
@@ -80,14 +192,10 @@ async def process_barcode(request: BarcodeRequest):
                 voice_message="Ошибка. Неверный формат штрихкода",
                 product_info=None
             )
-        
+
+        # Если длина != 9, пытаемся обработать как штрихкод заказа
         if len(barcode) != 9:
-            return ApprovalResponse(
-                success=False,
-                message=f"Штрихкод должен содержать 9 цифр (получено: {len(barcode)})",
-                voice_message="Ошибка. Неверная длина штрихкода",
-                product_info=None
-            )
+            return await process_order_barcode(barcode)
         
         # Парсим штрихкод
         item_number = int(barcode[:2])  # Первые 2 цифры - номер изделия
@@ -396,10 +504,10 @@ async def process_barcode(request: BarcodeRequest):
                     """
                     db.execute_update(update_order_state_query, (order_id,))
 
-                    print(f"✓ Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
+                    print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
             except Exception as e:
                 # Логируем ошибку, но не прерываем основной процесс
-                print(f"✗ Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+                print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
 
         # 10. Формируем успешный ответ
         models_count = len(models_result)
