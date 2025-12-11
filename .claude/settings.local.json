@@ -31,7 +31,10 @@
       "Bash(d:barcodesapivenvScriptspython.exe main.py)",
       "Bash(\"/d/barcodes/api/venv/Scripts/python.exe\" \"/d/barcodes/api/main.py\")",
       "Bash(/d/barcodes/api/venv/Scripts/python.exe main.py)",
-      "Bash(timeout /t 5)"
+      "Bash(timeout /t 5)",
+      "Bash(cd:*)",
+      "Bash(d:\\barcodes\\api\\venv\\Scripts\\python.exe -c:*)",
+      "Bash(.venvScriptspython.exe -m py_compile main.py)"
     ],
     "deny": [],
     "ask": []

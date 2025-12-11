@@ -323,12 +323,16 @@ async def process_barcode(request: BarcodeRequest):
                 product_info=None
             )
 
-        # 8. Получаем статистику по заказу (ПОСЛЕ проводки)
+        # 8. Получаем статистику по заказу И проверяем готовность (ПОСЛЕ проводки)
+        # Объединяем все проверки в один запрос для оптимизации
         order_id = product_data['ORDERID']
 
-        # Запрос для получения общего количества изделий в заказе
-        query_total_items = """
-            SELECT SUM(wd.qty) as TOTAL
+        # Единый запрос для получения статистики и проверки готовности заказа
+        query_order_stats = """
+            SELECT
+                SUM(wd.qty) as TOTAL,
+                SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
+                COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
             FROM ORDERS o
             JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
             JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
@@ -338,26 +342,66 @@ async def process_barcode(request: BarcodeRequest):
             AND el.CTTYPEELEMSID = 2
         """
 
-        # Запрос для получения количества проведенных изделий в заказе
-        query_approved_items = """
-            SELECT SUM(wd.qty) as APPROVED
-            FROM ORDERS o
-            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
-            WHERE o.ORDERID = ?
-            AND el.CTTYPEELEMSID = 2
-            AND wd.ISAPPROVED = 1
-        """
+        stats_result = db.execute_query(query_order_stats, (order_id,))
 
-        total_items_result = db.execute_query(query_total_items, (order_id,))
-        approved_items_result = db.execute_query(query_approved_items, (order_id,))
+        total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
+        approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
+        not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
 
-        total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
-        approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
+        # 9. Проверяем, не готов ли теперь весь заказ
+        # Если NOT_APPROVED_COUNT = 0, значит все изделия готовы
+        all_approved = (not_approved_count == 0)
+        has_items = (total_items_in_order > 0)
 
-        # 9. Формируем успешный ответ
+        # Если все изделия готовы, устанавливаем статус "Completed" (ID = 4)
+        if all_approved and has_items:
+            try:
+                # Проверяем текущее состояние заказа
+                current_state_query = """
+                    SELECT orderstateid FROM orders WHERE orderid = ?
+                """
+                current_state = db.execute_query(current_state_query, (order_id,))
+                current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
+
+                # Устанавливаем статус только если он еще не "Completed" (4)
+                if current_orderstateid != 4:
+                    # Получаем следующий ID для ORDERSTATESREG
+                    get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
+                    next_id_result = db.execute_query(get_next_id_query)
+                    next_id = (next_id_result[0]['MAXID'] or 0) + 1
+
+                    # Получаем максимальную позицию состояния для данного заказа
+                    get_max_posit_query = """
+                        SELECT MAX(stateposit) as MAXPOSIT
+                        FROM orderstatesreg
+                        WHERE orderid = ?
+                    """
+                    max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
+                    next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
+
+                    # Добавляем запись в ORDERSTATESREG
+                    # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
+                    insert_state_query = """
+                        INSERT INTO orderstatesreg
+                        (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+                        VALUES (?, ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+                    """
+                    db.execute_update(insert_state_query, (next_id, order_id, next_posit))
+
+                    # Обновляем состояние заказа
+                    update_order_state_query = """
+                        UPDATE orders
+                        SET orderstateid = 4
+                        WHERE orderid = ?
+                    """
+                    db.execute_update(update_order_state_query, (order_id,))
+
+                    print(f"✓ Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
+            except Exception as e:
+                # Логируем ошибку, но не прерываем основной процесс
+                print(f"✗ Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+
+        # 10. Формируем успешный ответ
         models_count = len(models_result)
         voice_message = f"Изделие {construction_number} заказа {order_number} готово"
 
@@ -365,6 +409,11 @@ async def process_barcode(request: BarcodeRequest):
         if total_updated < len(whdetail_records):
             already_count = len(whdetail_records) - total_updated
             message += f" ({already_count} уже было приходовано ранее)"
+
+        # Если заказ полностью готов, добавляем это в сообщение
+        if all_approved and has_items:
+            message += f". ЗАКАЗ {order_number} ПОЛНОСТЬЮ ГОТОВ!"
+            voice_message = f"Заказ {order_number} полностью готов!"
 
         return ApprovalResponse(
             success=True,
