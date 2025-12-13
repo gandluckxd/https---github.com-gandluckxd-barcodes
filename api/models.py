@@ -21,6 +21,7 @@ class BarcodeRequest(BaseModel):
 class ProductInfo(BaseModel):
     """Информация об изделии"""
     order_number: str = Field(..., description="Номер заказа")
+    proddate: Optional[str] = Field(None, description="Дата производства")
     construction_number: Optional[str] = Field(None, description="Номер конструкции")
     item_number: Optional[int] = Field(None, description="Номер изделия")
     orderitems_id: Optional[int] = Field(None, description="ID элемента заказа (изделия)")

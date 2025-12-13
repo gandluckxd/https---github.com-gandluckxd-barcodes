@@ -346,9 +346,9 @@ class BarcodeApp(QMainWindow):
         history_group.setLayout(history_layout)
 
         self.history_table = QTableWidget()
-        self.history_table.setColumnCount(9)
+        self.history_table.setColumnCount(10)
         self.history_table.setHorizontalHeaderLabels([
-            "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
+            "Статус", "Штрихкод", "Заказ", "Дата произв.", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
         ])
 
         # Увеличиваем шрифт таблицы
@@ -367,12 +367,13 @@ class BarcodeApp(QMainWindow):
         header.setSectionResizeMode(0, QHeaderView.ResizeToContents)  # Статус
         header.setSectionResizeMode(1, QHeaderView.ResizeToContents)  # Штрихкод
         header.setSectionResizeMode(2, QHeaderView.ResizeToContents)  # Заказ
-        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Изделие
-        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Номер №
-        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Размеры
-        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Кол-во в заказе
-        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Кол-во готово
-        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Время
+        header.setSectionResizeMode(3, QHeaderView.ResizeToContents)  # Дата производства
+        header.setSectionResizeMode(4, QHeaderView.ResizeToContents)  # Изделие
+        header.setSectionResizeMode(5, QHeaderView.ResizeToContents)  # Номер №
+        header.setSectionResizeMode(6, QHeaderView.ResizeToContents)  # Размеры
+        header.setSectionResizeMode(7, QHeaderView.ResizeToContents)  # Кол-во в заказе
+        header.setSectionResizeMode(8, QHeaderView.ResizeToContents)  # Кол-во готово
+        header.setSectionResizeMode(9, QHeaderView.ResizeToContents)  # Время
 
         # Увеличиваем высоту строк
         self.history_table.verticalHeader().setDefaultSectionSize(60)
@@ -888,7 +889,7 @@ class BarcodeApp(QMainWindow):
 
         self.history_table.insertRow(0)  # Добавляем в начало
 
-        # Порядок столбцов: "Статус", "Штрихкод", "Заказ", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
+        # Порядок столбцов: "Статус", "Штрихкод", "Заказ", "Дата произв.", "Изделие", "Номер №", "Размеры", "Кол-во в заказе", "Кол-во готово", "Время"
 
         # Статус (колонка 0)
         status_item = QTableWidgetItem(status)
@@ -907,35 +908,39 @@ class BarcodeApp(QMainWindow):
             order_num = product_info.get('order_number') or '-'
             self.history_table.setItem(0, 2, QTableWidgetItem(order_num))
 
-            # Изделие (колонка 3)
-            construction_num = product_info.get('construction_number') or '-'
-            self.history_table.setItem(0, 3, QTableWidgetItem(construction_num))
+            # Дата производства (колонка 3)
+            proddate = product_info.get('proddate') or '-'
+            self.history_table.setItem(0, 3, QTableWidgetItem(proddate))
 
-            # Номер № (колонка 4)
+            # Изделие (колонка 4)
+            construction_num = product_info.get('construction_number') or '-'
+            self.history_table.setItem(0, 4, QTableWidgetItem(construction_num))
+
+            # Номер № (колонка 5)
             item_number = product_info.get('item_number')
             qty = product_info.get('qty')
             if item_number is not None and qty is not None:
                 item_num = f"{item_number} / {qty}"
             else:
                 item_num = "-"
-            self.history_table.setItem(0, 4, QTableWidgetItem(item_num))
+            self.history_table.setItem(0, 5, QTableWidgetItem(item_num))
 
-            # Размеры (колонка 5)
+            # Размеры (колонка 6)
             width = product_info.get('width', 0)
             height = product_info.get('height', 0)
             if width and height:
                 size_str = f"{width} x {height}"
             else:
                 size_str = "-"
-            self.history_table.setItem(0, 5, QTableWidgetItem(size_str))
+            self.history_table.setItem(0, 6, QTableWidgetItem(size_str))
 
-            # Кол-во изделий в заказе (колонка 6)
+            # Кол-во изделий в заказе (колонка 7)
             total_items = product_info.get('total_items_in_order')
-            self.history_table.setItem(0, 6, QTableWidgetItem(str(total_items) if total_items is not None else "-"))
+            self.history_table.setItem(0, 7, QTableWidgetItem(str(total_items) if total_items is not None else "-"))
 
-            # Проведено изделий в заказе (колонка 7)
+            # Проведено изделий в заказе (колонка 8)
             approved_items = product_info.get('approved_items_in_order')
-            self.history_table.setItem(0, 7, QTableWidgetItem(str(approved_items) if approved_items is not None else "-"))
+            self.history_table.setItem(0, 8, QTableWidgetItem(str(approved_items) if approved_items is not None else "-"))
         else:
             self.history_table.setItem(0, 2, QTableWidgetItem("-"))
             self.history_table.setItem(0, 3, QTableWidgetItem("-"))
@@ -943,10 +948,11 @@ class BarcodeApp(QMainWindow):
             self.history_table.setItem(0, 5, QTableWidgetItem("-"))
             self.history_table.setItem(0, 6, QTableWidgetItem("-"))
             self.history_table.setItem(0, 7, QTableWidgetItem("-"))
+            self.history_table.setItem(0, 8, QTableWidgetItem("-"))
 
-        # Время (колонка 8)
+        # Время (колонка 9)
         time_item = QTableWidgetItem(current_time)
-        self.history_table.setItem(0, 8, time_item)
+        self.history_table.setItem(0, 9, time_item)
 
         # Ограничиваем историю до 100 записей
         if self.history_table.rowCount() > 100:

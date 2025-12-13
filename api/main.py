@@ -127,6 +127,7 @@ async def process_order_barcode(barcode: str) -> ApprovalResponse:
             voice_message=f"Заказ {order_number} отгружен",
             product_info=ProductInfo(
                 order_number=order_number,
+                proddate=None,
                 construction_number=None,
                 item_number=None,
                 orderitems_id=None,
@@ -217,11 +218,12 @@ async def process_barcode(request: BarcodeRequest):
         
         # 1. Находим ORDERITEMS стеклопакета по его ID
         query_glass = """
-            SELECT 
+            SELECT
                 oi.ORDERITEMSID,
                 oi.NAME as GLASS_NAME,
                 oi.ORDERID,
-                o.ORDERNO
+                o.ORDERNO,
+                o.PRODDATE
             FROM ORDERITEMS oi
             INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
             WHERE oi.ORDERITEMSID = ?
@@ -264,12 +266,13 @@ async def process_barcode(request: BarcodeRequest):
         
         # 3. Находим ORDERITEMSID изделия по названию заказа и номеру конструкции
         query_product = """
-            SELECT 
+            SELECT
                 oi.ORDERITEMSID,
                 oi.NAME as PRODUCT_NAME,
                 oi.QTY,
                 o.ORDERNO,
-                o.ORDERID
+                o.ORDERID,
+                o.PRODDATE
             FROM ORDERITEMS oi
             INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
             WHERE o.ORDERNO = ? AND oi.NAME = ?
@@ -289,6 +292,18 @@ async def process_barcode(request: BarcodeRequest):
         orderitems_id = product_data['ORDERITEMSID']
         order_number = product_data['ORDERNO'].strip() if product_data['ORDERNO'] else "?"
         orderitem_qty = product_data['QTY']
+        order_id = product_data['ORDERID']
+
+        # Форматируем дату производства
+        proddate_raw = product_data.get('PRODDATE')
+        proddate = None
+        if proddate_raw:
+            if isinstance(proddate_raw, datetime):
+                proddate = proddate_raw.strftime('%d.%m.%Y')
+            elif hasattr(proddate_raw, 'strftime'):
+                proddate = proddate_raw.strftime('%d.%m.%Y')
+            else:
+                proddate = str(proddate_raw)
         
         # Проверяем, что номер изделия не превышает количество
         if item_number > orderitem_qty:
@@ -368,8 +383,6 @@ async def process_barcode(request: BarcodeRequest):
                 date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
             # Получаем статистику по заказу для уже приходованного изделия
-            order_id = product_data['ORDERID']
-
             query_total_items = """
                 SELECT SUM(wd.qty) as TOTAL
                 FROM ORDERS o
@@ -405,6 +418,7 @@ async def process_barcode(request: BarcodeRequest):
                 voice_message="Изделие уже было отмечено готовым",
                 product_info=ProductInfo(
                     order_number=order_number,
+                    proddate=proddate,
                     construction_number=construction_number,
                     item_number=item_number,
                     orderitems_id=orderitems_id,
@@ -543,6 +557,7 @@ async def process_barcode(request: BarcodeRequest):
             voice_message=voice_message,
             product_info=ProductInfo(
                 order_number=order_number,
+                proddate=proddate,
                 construction_number=construction_number,
                 item_number=item_number,
                 orderitems_id=orderitems_id,
