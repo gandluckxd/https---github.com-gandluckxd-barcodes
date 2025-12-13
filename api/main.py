@@ -642,20 +642,20 @@ async def get_daily_statistics(
                 o.orderno,
                 o.rcomment,
                 SUM(CASE
-                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8
-                    THEN oi.qty ELSE 0
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27
+                    THEN 1 ELSE 0
                 END) AS planned_pvh,
                 SUM(CASE
                     WHEN (rs.systemtype = 1) OR (rs.rsystemid = 8)
-                    THEN oi.qty ELSE 0
+                    THEN 1 ELSE 0
                 END) AS planned_razdv,
                 SUM(CASE
-                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND wd.isapproved = 1
-                    THEN COALESCE(wd.qty, 0) ELSE 0
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27 AND wd.isapproved = 1
+                    THEN 1 ELSE 0
                 END) AS completed_pvh,
                 SUM(CASE
                     WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
-                    THEN COALESCE(wd.qty, 0) ELSE 0
+                    THEN 1 ELSE 0
                 END) AS completed_razdv
             FROM orders o
             JOIN orderitems oi ON oi.orderid = o.orderid
@@ -772,20 +772,20 @@ async def get_order_statistics(
                 o.orderno,
                 o.rcomment,
                 SUM(CASE
-                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8
-                    THEN oi.qty ELSE 0
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27
+                    THEN 1 ELSE 0
                 END) AS planned_pvh,
                 SUM(CASE
                     WHEN (rs.systemtype = 1) OR (rs.rsystemid = 8)
-                    THEN oi.qty ELSE 0
+                    THEN 1 ELSE 0
                 END) AS planned_razdv,
                 SUM(CASE
-                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND wd.isapproved = 1
-                    THEN COALESCE(wd.qty, 0) ELSE 0
+                    WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27 AND wd.isapproved = 1
+                    THEN 1 ELSE 0
                 END) AS completed_pvh,
                 SUM(CASE
                     WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
-                    THEN COALESCE(wd.qty, 0) ELSE 0
+                    THEN 1 ELSE 0
                 END) AS completed_razdv
             FROM orders o
             JOIN orderitems oi ON oi.orderid = o.orderid
