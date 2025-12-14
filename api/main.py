@@ -30,6 +30,858 @@ app.add_middleware(
 )
 
 
+def parse_barcode(barcode: str) -> dict:
+    """
+    Парсинг штрихкода с определением типа
+
+    Форматы:
+    - IZD-123456789: изделие (9 цифр после префикса)
+    - ORD-12345: заказ (ID заказа)
+    - ITM-12345: материал (ID материала - itemsdetailid)
+    - SET-12345: набор (ID набора - itemssetid)
+    - 123456789: старый формат изделия (9 цифр)
+    - 12345: старый формат заказа (не 9 цифр)
+
+    Returns:
+        dict: {
+            'type': 'IZD' | 'ORD' | 'ITM' | 'SET' | 'LEGACY_IZD' | 'LEGACY_ORD',
+            'value': str - значение после префикса
+        }
+    """
+    barcode = barcode.strip().upper()
+
+    # Проверка на наличие префикса (формат XXX-...)
+    if '-' in barcode:
+        parts = barcode.split('-', 1)
+        if len(parts) == 2:
+            prefix, value = parts
+            prefix = prefix.strip()
+            value = value.strip()
+
+            if prefix in ['IZD', 'ORD', 'ITM', 'SET']:
+                return {
+                    'type': prefix,
+                    'value': value
+                }
+
+    # Старый формат без префикса
+    if barcode.isdigit():
+        if len(barcode) == 9:
+            return {
+                'type': 'LEGACY_IZD',
+                'value': barcode
+            }
+        else:
+            return {
+                'type': 'LEGACY_ORD',
+                'value': barcode
+            }
+
+    # Неизвестный формат
+    return {
+        'type': 'UNKNOWN',
+        'value': barcode
+    }
+
+
+async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
+    """
+    Обработка штрихкода материала (префикс ITM)
+    Поиск CT_ELEMENTS по полю ITEMSDETAILID
+
+    Args:
+        barcode_value: ID материала (itemsdetailid)
+
+    Returns:
+        ApprovalResponse с результатом операции
+    """
+    try:
+        itemsdetailid = int(barcode_value)
+    except ValueError:
+        return ApprovalResponse(
+            success=False,
+            message=f"Некорректный ID материала: {barcode_value}",
+            voice_message="Ошибка. Некорректный ID материала",
+            product_info=None
+        )
+
+    # Находим элемент по ITEMSDETAILID
+    query_element = """
+        SELECT
+            e.CTELEMENTSID,
+            e.RNAME as ELEMENT_NAME,
+            e.WIDTH,
+            e.HEIGHT,
+            e.MODELID,
+            e.ORDERITEMSID,
+            e.ITEMSDETAILID
+        FROM CT_ELEMENTS e
+        WHERE e.ITEMSDETAILID = ?
+    """
+
+    element_result = db.execute_query(query_element, (itemsdetailid,))
+
+    if not element_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Материал с ID {itemsdetailid} не найден",
+            voice_message="Материал не найден",
+            product_info=None
+        )
+
+    element_data = element_result[0]
+    ctelementsid = element_data['CTELEMENTSID']
+    element_name = element_data['ELEMENT_NAME'].strip() if element_data['ELEMENT_NAME'] else None
+    width = element_data['WIDTH']
+    height = element_data['HEIGHT']
+    orderitems_id = element_data['ORDERITEMSID']
+
+    # Получаем информацию о заказе через ORDERITEMSID
+    order_number = None
+    proddate = None
+    order_id = None
+    total_items_in_order = None
+    approved_items_in_order = None
+
+    if orderitems_id:
+        query_order = """
+            SELECT
+                o.ORDERID,
+                o.ORDERNO,
+                o.PRODDATE
+            FROM ORDERITEMS oi
+            INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
+            WHERE oi.ORDERITEMSID = ?
+        """
+        order_result = db.execute_query(query_order, (orderitems_id,))
+
+        if order_result:
+            order_data = order_result[0]
+            order_number = order_data['ORDERNO'].strip() if order_data['ORDERNO'] else None
+            order_id = order_data['ORDERID']
+
+            # Форматируем дату производства
+            proddate_raw = order_data.get('PRODDATE')
+            if proddate_raw:
+                if isinstance(proddate_raw, datetime):
+                    proddate = proddate_raw.strftime('%d.%m.%Y')
+                elif hasattr(proddate_raw, 'strftime'):
+                    proddate = proddate_raw.strftime('%d.%m.%Y')
+                else:
+                    proddate = str(proddate_raw)
+
+            # Получаем статистику по заказу
+            query_order_stats = """
+                SELECT
+                    SUM(wd.qty) as TOTAL,
+                    SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
+                FROM ORDERS o
+                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                WHERE o.ORDERID = ?
+                AND el.CTTYPEELEMSID = 2
+            """
+            stats_result = db.execute_query(query_order_stats, (order_id,))
+
+            if stats_result:
+                total_items_in_order = stats_result[0]['TOTAL'] if stats_result[0]['TOTAL'] else 0
+                approved_items_in_order = stats_result[0]['APPROVED'] if stats_result[0]['APPROVED'] else 0
+
+    # Находим запись в CT_WHDETAIL
+    query_whdetail = """
+        SELECT
+            w.CTWHDETAILID,
+            w.ISAPPROVED,
+            w.DATEAPPROVED,
+            w.ITEMNO
+        FROM CT_WHDETAIL w
+        WHERE w.CTELEMENTSID = ?
+    """
+
+    whdetail_result = db.execute_query(query_whdetail, (ctelementsid,))
+
+    if not whdetail_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Запись на складе для материала {itemsdetailid} не найдена",
+            voice_message="Материал не найден на складе",
+            product_info=None
+        )
+
+    whdetail_data = whdetail_result[0]
+
+    # Проверяем, не приходован ли уже
+    if whdetail_data['ISAPPROVED'] == 1:
+        date_approved = whdetail_data['DATEAPPROVED']
+        date_str = ""
+        if date_approved:
+            date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
+
+        return ApprovalResponse(
+            success=False,
+            message=f"Материал уже был отмечен готовым{date_str}",
+            voice_message="Материал уже был отмечен готовым",
+            product_info=ProductInfo(
+                order_number=order_number,
+                proddate=proddate,
+                construction_number=None,
+                item_number=whdetail_data['ITEMNO'],
+                orderitems_id=orderitems_id,
+                orderitems_name=element_name,
+                qty=None,
+                element_name=element_name,
+                width=width,
+                height=height,
+                glass_orderitems_id=None,
+                order_id=order_id,
+                total_items_in_order=total_items_in_order,
+                approved_items_in_order=approved_items_in_order
+            )
+        )
+
+    # Приходуем материал
+    update_query = """
+        UPDATE CT_WHDETAIL
+        SET ISAPPROVED = 1,
+            DATEAPPROVED = CURRENT_TIMESTAMP
+        WHERE CTWHDETAILID = ?
+    """
+
+    rows_updated = db.execute_update(update_query, (whdetail_data['CTWHDETAILID'],))
+
+    if rows_updated == 0:
+        return ApprovalResponse(
+            success=False,
+            message="Не удалось обновить запись в базе данных",
+            voice_message="Ошибка при обновлении базы данных",
+            product_info=None
+        )
+
+    return ApprovalResponse(
+        success=True,
+        message=f"Материал {element_name} успешно оприходован!",
+        voice_message=f"Материал {element_name} готов",
+        product_info=ProductInfo(
+            order_number=order_number,
+            proddate=proddate,
+            construction_number=None,
+            item_number=whdetail_data['ITEMNO'],
+            orderitems_id=element_data['ORDERITEMSID'],
+            orderitems_name=element_name,
+            qty=None,
+            element_name=element_name,
+            width=width,
+            height=height,
+            glass_orderitems_id=None,
+            order_id=order_id,
+            total_items_in_order=total_items_in_order,
+            approved_items_in_order=approved_items_in_order
+        )
+    )
+
+
+async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
+    """
+    Обработка штрихкода набора (префикс SET)
+    Поиск CT_ELEMENTS по полю ITEMSSETSID
+
+    Args:
+        barcode_value: ID набора (itemssetid)
+
+    Returns:
+        ApprovalResponse с результатом операции
+    """
+    try:
+        itemssetid = int(barcode_value)
+    except ValueError:
+        return ApprovalResponse(
+            success=False,
+            message=f"Некорректный ID набора: {barcode_value}",
+            voice_message="Ошибка. Некорректный ID набора",
+            product_info=None
+        )
+
+    # Находим элементы по ITEMSSETSID
+    query_elements = """
+        SELECT
+            e.CTELEMENTSID,
+            e.RNAME as ELEMENT_NAME,
+            e.WIDTH,
+            e.HEIGHT,
+            e.MODELID,
+            e.ORDERITEMSID,
+            e.ITEMSSETSID
+        FROM CT_ELEMENTS e
+        WHERE e.ITEMSSETSID = ?
+    """
+
+    elements_result = db.execute_query(query_elements, (itemssetid,))
+
+    if not elements_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Набор с ID {itemssetid} не найден",
+            voice_message="Набор не найден",
+            product_info=None
+        )
+
+    # Получаем записи CT_WHDETAIL для всех элементов набора
+    whdetail_records = []
+    for element in elements_result:
+        ctelementsid = element['CTELEMENTSID']
+
+        query_whdetail = """
+            SELECT
+                w.CTWHDETAILID,
+                w.ISAPPROVED,
+                w.DATEAPPROVED,
+                w.ITEMNO,
+                w.CTELEMENTSID
+            FROM CT_WHDETAIL w
+            WHERE w.CTELEMENTSID = ?
+        """
+
+        whdetail_result = db.execute_query(query_whdetail, (ctelementsid,))
+
+        if whdetail_result:
+            whdetail_records.extend(whdetail_result)
+
+    if not whdetail_records:
+        return ApprovalResponse(
+            success=False,
+            message=f"Записи на складе для набора {itemssetid} не найдены",
+            voice_message="Набор не найден на складе",
+            product_info=None
+        )
+
+    # Берем первый элемент для отображения информации
+    first_element = elements_result[0]
+    element_name = first_element['ELEMENT_NAME'].strip() if first_element['ELEMENT_NAME'] else None
+    width = first_element['WIDTH']
+    height = first_element['HEIGHT']
+    orderitems_id = first_element['ORDERITEMSID']
+
+    # Получаем информацию о заказе через ORDERITEMSID
+    order_number = None
+    proddate = None
+    order_id = None
+    total_items_in_order = None
+    approved_items_in_order = None
+
+    if orderitems_id:
+        query_order = """
+            SELECT
+                o.ORDERNO,
+                o.PRODDATE,
+                o.ORDERID
+            FROM ORDERITEMS oi
+            INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
+            WHERE oi.ORDERITEMSID = ?
+        """
+
+        order_result = db.execute_query(query_order, (orderitems_id,))
+
+        if order_result:
+            order_data = order_result[0]
+            order_number = order_data['ORDERNO'].strip() if order_data['ORDERNO'] else None
+            proddate_obj = order_data['PRODDATE']
+            if proddate_obj:
+                proddate = proddate_obj.strftime('%d.%m.%Y')
+            order_id = order_data['ORDERID']
+
+            # Получаем статистику по заказу
+            query_stats = """
+                SELECT
+                    COUNT(*) as TOTAL_ITEMS,
+                    SUM(CASE WHEN oi.ISAPPROVED = 1 THEN 1 ELSE 0 END) as APPROVED_ITEMS
+                FROM ORDERITEMS oi
+                WHERE oi.ORDERID = ?
+                    AND oi.ORDERITEMSID IN (
+                        SELECT DISTINCT ORDERITEMSID
+                        FROM CT_ELEMENTS
+                        WHERE ORDERITEMSID IS NOT NULL
+                    )
+            """
+
+            stats_result = db.execute_query(query_stats, (order_id,))
+
+            if stats_result:
+                stats_data = stats_result[0]
+                total_items_in_order = stats_data['TOTAL_ITEMS']
+                approved_items_in_order = stats_data['APPROVED_ITEMS']
+
+    # Проверяем, не приходованы ли уже ВСЕ записи
+    already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
+
+    if len(already_approved) == len(whdetail_records):
+        first_whdetail = whdetail_records[0]
+        date_approved = first_whdetail['DATEAPPROVED']
+        date_str = ""
+        if date_approved:
+            date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
+
+        return ApprovalResponse(
+            success=False,
+            message=f"Набор уже был отмечен готовым{date_str}",
+            voice_message="Набор уже был отмечен готовым",
+            product_info=ProductInfo(
+                order_number=order_number,
+                proddate=proddate,
+                construction_number=None,
+                item_number=None,
+                orderitems_id=first_element['ORDERITEMSID'],
+                orderitems_name=element_name,
+                qty=len(whdetail_records),
+                element_name=element_name,
+                width=width,
+                height=height,
+                glass_orderitems_id=None,
+                order_id=order_id,
+                total_items_in_order=total_items_in_order,
+                approved_items_in_order=approved_items_in_order
+            )
+        )
+
+    # Приходуем ВСЕ элементы набора
+    total_updated = 0
+    for whdetail in whdetail_records:
+        # Пропускаем уже приходованные
+        if whdetail['ISAPPROVED'] == 1:
+            continue
+
+        update_query = """
+            UPDATE CT_WHDETAIL
+            SET ISAPPROVED = 1,
+                DATEAPPROVED = CURRENT_TIMESTAMP
+            WHERE CTWHDETAILID = ?
+        """
+
+        rows_updated = db.execute_update(update_query, (whdetail['CTWHDETAILID'],))
+        total_updated += rows_updated
+
+    if total_updated == 0:
+        return ApprovalResponse(
+            success=False,
+            message="Не удалось обновить записи в базе данных",
+            voice_message="Ошибка при обновлении базы данных",
+            product_info=None
+        )
+
+    message = f"Успешно оприходовано {total_updated} элемент(ов) набора"
+    if total_updated < len(whdetail_records):
+        already_count = len(whdetail_records) - total_updated
+        message += f" ({already_count} уже было приходовано ранее)"
+
+    return ApprovalResponse(
+        success=True,
+        message=message,
+        voice_message=f"Набор {element_name} готов",
+        product_info=ProductInfo(
+            order_number=order_number,
+            proddate=proddate,
+            construction_number=None,
+            item_number=None,
+            orderitems_id=first_element['ORDERITEMSID'],
+            orderitems_name=element_name,
+            qty=len(whdetail_records),
+            element_name=element_name,
+            width=width,
+            height=height,
+            glass_orderitems_id=None,
+            order_id=order_id,
+            total_items_in_order=total_items_in_order,
+            approved_items_in_order=approved_items_in_order
+        )
+    )
+
+
+async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
+    """
+    Обработка штрихкода изделия (префикс IZD или старый формат 9 цифр)
+
+    Формат: [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
+    - Первые 2 цифры - номер изделия (01, 02, ... 15...)
+    - Остальные 7 цифр - ORDERITEMSID стеклопакета (заполнения)
+
+    Args:
+        barcode_value: 9 цифр штрихкода изделия
+
+    Returns:
+        ApprovalResponse с результатом операции
+    """
+    # Валидация: должно быть 9 цифр
+    if not barcode_value.isdigit() or len(barcode_value) != 9:
+        return ApprovalResponse(
+            success=False,
+            message=f"Некорректный штрихкод изделия: {barcode_value}. Ожидается 9 цифр",
+            voice_message="Ошибка. Некорректный штрихкод изделия",
+            product_info=None
+        )
+
+    # Парсим штрихкод
+    item_number = int(barcode_value[:2])  # Первые 2 цифры - номер изделия
+    glass_orderitems_id = int(barcode_value[2:])  # Остальные 7 цифр - ORDERITEMSID стеклопакета
+
+    # 1. Находим ORDERITEMS стеклопакета по его ID
+    query_glass = """
+        SELECT
+            oi.ORDERITEMSID,
+            oi.NAME as GLASS_NAME,
+            oi.ORDERID,
+            o.ORDERNO,
+            o.PRODDATE
+        FROM ORDERITEMS oi
+        INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
+        WHERE oi.ORDERITEMSID = ?
+    """
+
+    glass_result = db.execute_query(query_glass, (glass_orderitems_id,))
+
+    if not glass_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Стеклопакет с ID {glass_orderitems_id} не найден в базе данных",
+            voice_message="Стеклопакет не найден в базе данных",
+            product_info=None
+        )
+
+    glass_data = glass_result[0]
+    glass_name = glass_data['GLASS_NAME'].strip() if glass_data['GLASS_NAME'] else ""
+
+    # 2. Парсим NAME стеклопакета: "19686 / 01 / С-1 [G 2 665]"
+    # Формат: [номер заказа] / [номер изделия] / [проём] [...]
+    if not glass_name or '/' not in glass_name:
+        return ApprovalResponse(
+            success=False,
+            message=f"Некорректный формат имени стеклопакета: {glass_name}",
+            voice_message="Ошибка. Некорректный формат имени стеклопакета",
+            product_info=None
+        )
+
+    parts = glass_name.split('/')
+    if len(parts) < 2:
+        return ApprovalResponse(
+            success=False,
+            message=f"Не удалось распарсить имя стеклопакета: {glass_name}",
+            voice_message="Ошибка парсинга имени стеклопакета",
+            product_info=None
+        )
+
+    order_name = parts[0].strip()  # "19686"
+    construction_number = parts[1].strip()  # "01"
+
+    # 3. Находим ORDERITEMSID изделия по названию заказа и номеру конструкции
+    query_product = """
+        SELECT
+            oi.ORDERITEMSID,
+            oi.NAME as PRODUCT_NAME,
+            oi.QTY,
+            o.ORDERNO,
+            o.ORDERID,
+            o.PRODDATE
+        FROM ORDERITEMS oi
+        INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
+        WHERE o.ORDERNO = ? AND oi.NAME = ?
+    """
+
+    product_result = db.execute_query(query_product, (order_name, construction_number))
+
+    if not product_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Изделие {construction_number} заказа №{order_name} не найдено",
+            voice_message=f"Изделие {construction_number} заказа №{order_name} не найдено",
+            product_info=None
+        )
+
+    product_data = product_result[0]
+    orderitems_id = product_data['ORDERITEMSID']
+    order_number = product_data['ORDERNO'].strip() if product_data['ORDERNO'] else "?"
+    orderitem_qty = product_data['QTY']
+    order_id = product_data['ORDERID']
+
+    # Форматируем дату производства
+    proddate_raw = product_data.get('PRODDATE')
+    proddate = None
+    if proddate_raw:
+        if isinstance(proddate_raw, datetime):
+            proddate = proddate_raw.strftime('%d.%m.%Y')
+        elif hasattr(proddate_raw, 'strftime'):
+            proddate = proddate_raw.strftime('%d.%m.%Y')
+        else:
+            proddate = str(proddate_raw)
+
+    # Проверяем, что номер изделия не превышает количество
+    if item_number > orderitem_qty:
+        return ApprovalResponse(
+            success=False,
+            message=f"Номер изделия {item_number} превышает количество {orderitem_qty}",
+            voice_message=f"Ошибка. Номер изделия {item_number} превышает количество {orderitem_qty}",
+            product_info=None
+        )
+
+    # 4. Находим ВСЕ модели для данного ORDERITEMSID
+    query_models = """
+        SELECT MODELID, MODELNO
+        FROM MODELS
+        WHERE ORDERITEMSID = ?
+        ORDER BY MODELNO
+    """
+
+    models_result = db.execute_query(query_models, (orderitems_id,))
+
+    if not models_result:
+        return ApprovalResponse(
+            success=False,
+            message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
+            voice_message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
+            product_info=None
+        )
+
+    # 5. Для каждой модели находим CT_ELEMENTS и CT_WHDETAIL с нужным ITEMNO
+    whdetail_records = []
+    for model in models_result:
+        model_id = model['MODELID']
+
+        query_whdetail = """
+            SELECT
+                w.CTWHDETAILID,
+                w.CTELEMENTSID,
+                w.ITEMNO,
+                w.ISAPPROVED,
+                w.USERAPPROVED,
+                w.DATEAPPROVED,
+                e.RNAME as ELEMENT_NAME,
+                e.WIDTH,
+                e.HEIGHT,
+                e.MODELID
+            FROM CT_WHDETAIL w
+            INNER JOIN CT_ELEMENTS e ON w.CTELEMENTSID = e.CTELEMENTSID
+            WHERE e.MODELID = ? AND w.ITEMNO = ? AND e.CTTYPEELEMSID = 2
+        """
+
+        whdetail_result = db.execute_query(query_whdetail, (model_id, item_number))
+
+        if whdetail_result:
+            whdetail_records.extend(whdetail_result)
+
+    if not whdetail_records:
+        return ApprovalResponse(
+            success=False,
+            message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
+            voice_message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
+            product_info=None
+        )
+
+    # Берем данные из первой записи для информации
+    whdetail_data = whdetail_records[0]
+    element_name = whdetail_data['ELEMENT_NAME'].strip() if whdetail_data['ELEMENT_NAME'] else None
+    width = whdetail_data['WIDTH']
+    height = whdetail_data['HEIGHT']
+
+    # 6. Проверяем, не приходованы ли уже ВСЕ записи
+    already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
+
+    if len(already_approved) == len(whdetail_records):
+        date_approved = whdetail_data['DATEAPPROVED']
+        date_str = ""
+        if date_approved:
+            date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
+
+        # Получаем статистику по заказу для уже приходованного изделия
+        query_total_items = """
+            SELECT SUM(wd.qty) as TOTAL
+            FROM ORDERS o
+            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            WHERE o.ORDERID = ?
+            AND el.CTTYPEELEMSID = 2
+        """
+
+        query_approved_items = """
+            SELECT SUM(wd.qty) as APPROVED
+            FROM ORDERS o
+            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            WHERE o.ORDERID = ?
+            AND el.CTTYPEELEMSID = 2
+            AND wd.ISAPPROVED = 1
+        """
+
+        total_items_result = db.execute_query(query_total_items, (order_id,))
+        approved_items_result = db.execute_query(query_approved_items, (order_id,))
+
+        total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
+        approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
+
+        return ApprovalResponse(
+            success=False,
+            message=f"Изделие уже было отмечено готовым{date_str}",
+            voice_message="Изделие уже было отмечено готовым",
+            product_info=ProductInfo(
+                order_number=order_number,
+                proddate=proddate,
+                construction_number=construction_number,
+                item_number=item_number,
+                orderitems_id=orderitems_id,
+                orderitems_name=construction_number,
+                qty=orderitem_qty,
+                element_name=element_name,
+                width=width,
+                height=height,
+                glass_orderitems_id=glass_orderitems_id,
+                order_id=order_id,
+                total_items_in_order=total_items_in_order,
+                approved_items_in_order=approved_items_in_order
+            )
+        )
+
+    # 7. Приходуем ВСЕ изделия - обновляем CT_WHDETAIL для всех моделей
+    total_updated = 0
+    for whdetail in whdetail_records:
+        # Пропускаем уже приходованные
+        if whdetail['ISAPPROVED'] == 1:
+            continue
+
+        update_query = """
+            UPDATE CT_WHDETAIL
+            SET ISAPPROVED = 1,
+                DATEAPPROVED = CURRENT_TIMESTAMP
+            WHERE CTWHDETAILID = ?
+        """
+
+        rows_updated = db.execute_update(update_query, (whdetail['CTWHDETAILID'],))
+        total_updated += rows_updated
+
+    if total_updated == 0:
+        return ApprovalResponse(
+            success=False,
+            message="Не удалось обновить записи в базе данных",
+            voice_message="Ошибка при обновлении базы данных",
+            product_info=None
+        )
+
+    # 8. Получаем статистику по заказу И проверяем готовность (ПОСЛЕ проводки)
+    # Объединяем все проверки в один запрос для оптимизации
+    order_id = product_data['ORDERID']
+
+    # Единый запрос для получения статистики и проверки готовности заказа
+    query_order_stats = """
+        SELECT
+            SUM(wd.qty) as TOTAL,
+            SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
+            COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
+        FROM ORDERS o
+        JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+        JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+        LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+        LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+        WHERE o.ORDERID = ?
+        AND el.CTTYPEELEMSID = 2
+    """
+
+    stats_result = db.execute_query(query_order_stats, (order_id,))
+
+    total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
+    approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
+    not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
+
+    # 9. Проверяем, не готов ли теперь весь заказ
+    # Если NOT_APPROVED_COUNT = 0, значит все изделия готовы
+    all_approved = (not_approved_count == 0)
+    has_items = (total_items_in_order > 0)
+
+    # Если все изделия готовы, устанавливаем статус "Completed" (ID = 4)
+    if all_approved and has_items:
+        try:
+            # Проверяем текущее состояние заказа
+            current_state_query = """
+                SELECT orderstateid FROM orders WHERE orderid = ?
+            """
+            current_state = db.execute_query(current_state_query, (order_id,))
+            current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
+
+            # Устанавливаем статус только если он еще не "Completed" (4)
+            if current_orderstateid != 4:
+                # Получаем следующий ID для ORDERSTATESREG
+                get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
+                next_id_result = db.execute_query(get_next_id_query)
+                next_id = (next_id_result[0]['MAXID'] or 0) + 1
+
+                # Получаем максимальную позицию состояния для данного заказа
+                get_max_posit_query = """
+                    SELECT MAX(stateposit) as MAXPOSIT
+                    FROM orderstatesreg
+                    WHERE orderid = ?
+                """
+                max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
+                next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
+
+                # Добавляем запись в ORDERSTATESREG
+                # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
+                insert_state_query = """
+                    INSERT INTO orderstatesreg
+                    (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+                    VALUES (?, ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+                """
+                db.execute_update(insert_state_query, (next_id, order_id, next_posit))
+
+                # Обновляем состояние заказа
+                update_order_state_query = """
+                    UPDATE orders
+                    SET orderstateid = 4
+                    WHERE orderid = ?
+                """
+                db.execute_update(update_order_state_query, (order_id,))
+
+                print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
+        except Exception as e:
+            # Логируем ошибку, но не прерываем основной процесс
+            print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+
+    # 10. Формируем успешный ответ
+    models_count = len(models_result)
+    voice_message = f"Изделие {construction_number} заказа {order_number} готово"
+
+    message = f"Успешно оприходовано {total_updated} изделие(й) из {models_count} модели(ей)"
+    if total_updated < len(whdetail_records):
+        already_count = len(whdetail_records) - total_updated
+        message += f" ({already_count} уже было приходовано ранее)"
+
+    # Если заказ полностью готов, добавляем это в сообщение
+    if all_approved and has_items:
+        message += f". ЗАКАЗ {order_number} ПОЛНОСТЬЮ ГОТОВ!"
+        voice_message = f"Заказ {order_number} полностью готов!"
+
+    return ApprovalResponse(
+        success=True,
+        message=message,
+        voice_message=voice_message,
+        product_info=ProductInfo(
+            order_number=order_number,
+            proddate=proddate,
+            construction_number=construction_number,
+            item_number=item_number,
+            orderitems_id=orderitems_id,
+            orderitems_name=construction_number,
+            qty=orderitem_qty,
+            element_name=element_name,
+            width=width,
+            height=height,
+            glass_orderitems_id=glass_orderitems_id,
+            order_id=order_id,
+            total_items_in_order=total_items_in_order,
+            approved_items_in_order=approved_items_in_order
+        )
+    )
+
+
 async def process_order_barcode(barcode: str) -> ApprovalResponse:
     """
     Обработка штрихкода заказа для перевода в статус "Отгружен"
@@ -188,390 +1040,54 @@ async def process_barcode(request: BarcodeRequest):
     """
     Обработка штрихкода и приходование изделия
 
-    Форматы штрихкода:
-    1. Штрихкод изделия (9 цифр): [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
-       - Первые 2 цифры - номер изделия (01, 02, ... 15...)
-       - Остальные 7 цифр - ORDERITEMSID стеклопакета (заполнения)
+    Поддерживаемые форматы:
+    1. IZD-123456789: Штрихкод изделия (9 цифр после префикса)
+       - Первые 2 цифры: номер изделия (01, 02, ...)
+       - Остальные 7 цифр: ORDERITEMSID стеклопакета
 
-    2. Штрихкод заказа (не 9 цифр): ORDERID заказа
+    2. ORD-12345: Штрихкод заказа (ID заказа)
        - Переводит заказ из статуса "Готов" в статус "Отгружен"
+
+    3. ITM-12345: Штрихкод материала (ID материала - itemsdetailid)
+       - Поиск CT_ELEMENTS по полю ITEMSDETAILID
+
+    4. SET-12345: Штрихкод набора (ID набора - itemssetid)
+       - Поиск CT_ELEMENTS по полю ITEMSSETSID
+
+    Старые форматы (обратная совместимость):
+    - 123456789 (9 цифр): обрабатывается как IZD
+    - 12345 (не 9 цифр): обрабатывается как ORD
     """
     try:
         barcode = request.barcode.strip()
 
-        # Валидация штрихкода
-        if not barcode or not barcode.isdigit():
+        # Парсим штрихкод и определяем тип
+        barcode_info = parse_barcode(barcode)
+        barcode_type = barcode_info['type']
+        barcode_value = barcode_info['value']
+
+        print(f"[INFO] Обработка штрихкода: type={barcode_type}, value={barcode_value}")
+
+        # Маршрутизация по типу штрихкода
+        if barcode_type == 'IZD' or barcode_type == 'LEGACY_IZD':
+            return await process_izd_barcode(barcode_value)
+
+        elif barcode_type == 'ORD' or barcode_type == 'LEGACY_ORD':
+            return await process_order_barcode(barcode_value)
+
+        elif barcode_type == 'ITM':
+            return await process_itm_barcode(barcode_value)
+
+        elif barcode_type == 'SET':
+            return await process_set_barcode(barcode_value)
+
+        else:  # UNKNOWN
             return ApprovalResponse(
                 success=False,
-                message="Неверный формат штрихкода",
-                voice_message="Ошибка. Неверный формат штрихкода",
+                message=f"Неизвестный формат штрихкода: {barcode}",
+                voice_message="Ошибка. Неизвестный формат штрихкода",
                 product_info=None
             )
-
-        # Если длина != 9, пытаемся обработать как штрихкод заказа
-        if len(barcode) != 9:
-            return await process_order_barcode(barcode)
-        
-        # Парсим штрихкод
-        item_number = int(barcode[:2])  # Первые 2 цифры - номер изделия
-        glass_orderitems_id = int(barcode[2:])  # Остальные 7 цифр - ORDERITEMSID стеклопакета
-        
-        # 1. Находим ORDERITEMS стеклопакета по его ID
-        query_glass = """
-            SELECT
-                oi.ORDERITEMSID,
-                oi.NAME as GLASS_NAME,
-                oi.ORDERID,
-                o.ORDERNO,
-                o.PRODDATE
-            FROM ORDERITEMS oi
-            INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
-            WHERE oi.ORDERITEMSID = ?
-        """
-        
-        glass_result = db.execute_query(query_glass, (glass_orderitems_id,))
-        
-        if not glass_result:
-            return ApprovalResponse(
-                success=False,
-                message=f"Стеклопакет с ID {glass_orderitems_id} не найден в базе данных",
-                voice_message="Стеклопакет не найден в базе данных",
-                product_info=None
-            )
-        
-        glass_data = glass_result[0]
-        glass_name = glass_data['GLASS_NAME'].strip() if glass_data['GLASS_NAME'] else ""
-        
-        # 2. Парсим NAME стеклопакета: "19686 / 01 / С-1 [G 2 665]"
-        # Формат: [номер заказа] / [номер изделия] / [проём] [...]
-        if not glass_name or '/' not in glass_name:
-            return ApprovalResponse(
-                success=False,
-                message=f"Некорректный формат имени стеклопакета: {glass_name}",
-                voice_message="Ошибка. Некорректный формат имени стеклопакета",
-                product_info=None
-            )
-        
-        parts = glass_name.split('/')
-        if len(parts) < 2:
-            return ApprovalResponse(
-                success=False,
-                message=f"Не удалось распарсить имя стеклопакета: {glass_name}",
-                voice_message="Ошибка парсинга имени стеклопакета",
-                product_info=None
-            )
-        
-        order_name = parts[0].strip()  # "19686"
-        construction_number = parts[1].strip()  # "01"
-        
-        # 3. Находим ORDERITEMSID изделия по названию заказа и номеру конструкции
-        query_product = """
-            SELECT
-                oi.ORDERITEMSID,
-                oi.NAME as PRODUCT_NAME,
-                oi.QTY,
-                o.ORDERNO,
-                o.ORDERID,
-                o.PRODDATE
-            FROM ORDERITEMS oi
-            INNER JOIN ORDERS o ON oi.ORDERID = o.ORDERID
-            WHERE o.ORDERNO = ? AND oi.NAME = ?
-        """
-        
-        product_result = db.execute_query(query_product, (order_name, construction_number))
-        
-        if not product_result:
-            return ApprovalResponse(
-                success=False,
-                message=f"Изделие {construction_number} заказа №{order_name} не найдено",
-                voice_message=f"Изделие {construction_number} заказа №{order_name} не найдено",
-                product_info=None
-            )
-        
-        product_data = product_result[0]
-        orderitems_id = product_data['ORDERITEMSID']
-        order_number = product_data['ORDERNO'].strip() if product_data['ORDERNO'] else "?"
-        orderitem_qty = product_data['QTY']
-        order_id = product_data['ORDERID']
-
-        # Форматируем дату производства
-        proddate_raw = product_data.get('PRODDATE')
-        proddate = None
-        if proddate_raw:
-            if isinstance(proddate_raw, datetime):
-                proddate = proddate_raw.strftime('%d.%m.%Y')
-            elif hasattr(proddate_raw, 'strftime'):
-                proddate = proddate_raw.strftime('%d.%m.%Y')
-            else:
-                proddate = str(proddate_raw)
-        
-        # Проверяем, что номер изделия не превышает количество
-        if item_number > orderitem_qty:
-            return ApprovalResponse(
-                success=False,
-                message=f"Номер изделия {item_number} превышает количество {orderitem_qty}",
-                voice_message=f"Ошибка. Номер изделия {item_number} превышает количество {orderitem_qty}",
-                product_info=None
-            )
-        
-        # 4. Находим ВСЕ модели для данного ORDERITEMSID
-        query_models = """
-            SELECT MODELID, MODELNO
-            FROM MODELS
-            WHERE ORDERITEMSID = ?
-            ORDER BY MODELNO
-        """
-
-        models_result = db.execute_query(query_models, (orderitems_id,))
-
-        if not models_result:
-            return ApprovalResponse(
-                success=False,
-                message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
-                voice_message=f"Модели для изделия {construction_number} заказа №{order_number} не найдены",
-                product_info=None
-            )
-
-        # 5. Для каждой модели находим CT_ELEMENTS и CT_WHDETAIL с нужным ITEMNO
-        whdetail_records = []
-        for model in models_result:
-            model_id = model['MODELID']
-
-            query_whdetail = """
-                SELECT
-                    w.CTWHDETAILID,
-                    w.CTELEMENTSID,
-                    w.ITEMNO,
-                    w.ISAPPROVED,
-                    w.USERAPPROVED,
-                    w.DATEAPPROVED,
-                    e.RNAME as ELEMENT_NAME,
-                    e.WIDTH,
-                    e.HEIGHT,
-                    e.MODELID
-                FROM CT_WHDETAIL w
-                INNER JOIN CT_ELEMENTS e ON w.CTELEMENTSID = e.CTELEMENTSID
-                WHERE e.MODELID = ? AND w.ITEMNO = ? AND e.CTTYPEELEMSID = 2
-            """
-
-            whdetail_result = db.execute_query(query_whdetail, (model_id, item_number))
-
-            if whdetail_result:
-                whdetail_records.extend(whdetail_result)
-
-        if not whdetail_records:
-            return ApprovalResponse(
-                success=False,
-                message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
-                voice_message=f"Изделие {construction_number} заказа №{order_number} не найдено на складе",
-                product_info=None
-            )
-
-        # Берем данные из первой записи для информации
-        whdetail_data = whdetail_records[0]
-        element_name = whdetail_data['ELEMENT_NAME'].strip() if whdetail_data['ELEMENT_NAME'] else None
-        width = whdetail_data['WIDTH']
-        height = whdetail_data['HEIGHT']
-        
-        # 6. Проверяем, не приходованы ли уже ВСЕ записи
-        already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
-
-        if len(already_approved) == len(whdetail_records):
-            date_approved = whdetail_data['DATEAPPROVED']
-            date_str = ""
-            if date_approved:
-                date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
-
-            # Получаем статистику по заказу для уже приходованного изделия
-            query_total_items = """
-                SELECT SUM(wd.qty) as TOTAL
-                FROM ORDERS o
-                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
-                WHERE o.ORDERID = ?
-                AND el.CTTYPEELEMSID = 2
-            """
-
-            query_approved_items = """
-                SELECT SUM(wd.qty) as APPROVED
-                FROM ORDERS o
-                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
-                WHERE o.ORDERID = ?
-                AND el.CTTYPEELEMSID = 2
-                AND wd.ISAPPROVED = 1
-            """
-
-            total_items_result = db.execute_query(query_total_items, (order_id,))
-            approved_items_result = db.execute_query(query_approved_items, (order_id,))
-
-            total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
-            approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
-
-            return ApprovalResponse(
-                success=False,
-                message=f"Изделие уже было отмечено готовым{date_str}",
-                voice_message="Изделие уже было отмечено готовым",
-                product_info=ProductInfo(
-                    order_number=order_number,
-                    proddate=proddate,
-                    construction_number=construction_number,
-                    item_number=item_number,
-                    orderitems_id=orderitems_id,
-                    orderitems_name=construction_number,
-                    qty=orderitem_qty,
-                    element_name=element_name,
-                    width=width,
-                    height=height,
-                    glass_orderitems_id=glass_orderitems_id,
-                    order_id=order_id,
-                    total_items_in_order=total_items_in_order,
-                    approved_items_in_order=approved_items_in_order
-                )
-            )
-        
-        # 7. Приходуем ВСЕ изделия - обновляем CT_WHDETAIL для всех моделей
-        total_updated = 0
-        for whdetail in whdetail_records:
-            # Пропускаем уже приходованные
-            if whdetail['ISAPPROVED'] == 1:
-                continue
-
-            update_query = """
-                UPDATE CT_WHDETAIL
-                SET ISAPPROVED = 1,
-                    DATEAPPROVED = CURRENT_TIMESTAMP
-                WHERE CTWHDETAILID = ?
-            """
-
-            rows_updated = db.execute_update(update_query, (whdetail['CTWHDETAILID'],))
-            total_updated += rows_updated
-
-        if total_updated == 0:
-            return ApprovalResponse(
-                success=False,
-                message="Не удалось обновить записи в базе данных",
-                voice_message="Ошибка при обновлении базы данных",
-                product_info=None
-            )
-
-        # 8. Получаем статистику по заказу И проверяем готовность (ПОСЛЕ проводки)
-        # Объединяем все проверки в один запрос для оптимизации
-        order_id = product_data['ORDERID']
-
-        # Единый запрос для получения статистики и проверки готовности заказа
-        query_order_stats = """
-            SELECT
-                SUM(wd.qty) as TOTAL,
-                SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
-                COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
-            FROM ORDERS o
-            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
-            WHERE o.ORDERID = ?
-            AND el.CTTYPEELEMSID = 2
-        """
-
-        stats_result = db.execute_query(query_order_stats, (order_id,))
-
-        total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
-        approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
-        not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
-
-        # 9. Проверяем, не готов ли теперь весь заказ
-        # Если NOT_APPROVED_COUNT = 0, значит все изделия готовы
-        all_approved = (not_approved_count == 0)
-        has_items = (total_items_in_order > 0)
-
-        # Если все изделия готовы, устанавливаем статус "Completed" (ID = 4)
-        if all_approved and has_items:
-            try:
-                # Проверяем текущее состояние заказа
-                current_state_query = """
-                    SELECT orderstateid FROM orders WHERE orderid = ?
-                """
-                current_state = db.execute_query(current_state_query, (order_id,))
-                current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
-
-                # Устанавливаем статус только если он еще не "Completed" (4)
-                if current_orderstateid != 4:
-                    # Получаем следующий ID для ORDERSTATESREG
-                    get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
-                    next_id_result = db.execute_query(get_next_id_query)
-                    next_id = (next_id_result[0]['MAXID'] or 0) + 1
-
-                    # Получаем максимальную позицию состояния для данного заказа
-                    get_max_posit_query = """
-                        SELECT MAX(stateposit) as MAXPOSIT
-                        FROM orderstatesreg
-                        WHERE orderid = ?
-                    """
-                    max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
-                    next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
-
-                    # Добавляем запись в ORDERSTATESREG
-                    # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
-                    insert_state_query = """
-                        INSERT INTO orderstatesreg
-                        (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
-                        VALUES (?, ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
-                    """
-                    db.execute_update(insert_state_query, (next_id, order_id, next_posit))
-
-                    # Обновляем состояние заказа
-                    update_order_state_query = """
-                        UPDATE orders
-                        SET orderstateid = 4
-                        WHERE orderid = ?
-                    """
-                    db.execute_update(update_order_state_query, (order_id,))
-
-                    print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
-            except Exception as e:
-                # Логируем ошибку, но не прерываем основной процесс
-                print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
-
-        # 10. Формируем успешный ответ
-        models_count = len(models_result)
-        voice_message = f"Изделие {construction_number} заказа {order_number} готово"
-
-        message = f"Успешно оприходовано {total_updated} изделие(й) из {models_count} модели(ей)"
-        if total_updated < len(whdetail_records):
-            already_count = len(whdetail_records) - total_updated
-            message += f" ({already_count} уже было приходовано ранее)"
-
-        # Если заказ полностью готов, добавляем это в сообщение
-        if all_approved and has_items:
-            message += f". ЗАКАЗ {order_number} ПОЛНОСТЬЮ ГОТОВ!"
-            voice_message = f"Заказ {order_number} полностью готов!"
-
-        return ApprovalResponse(
-            success=True,
-            message=message,
-            voice_message=voice_message,
-            product_info=ProductInfo(
-                order_number=order_number,
-                proddate=proddate,
-                construction_number=construction_number,
-                item_number=item_number,
-                orderitems_id=orderitems_id,
-                orderitems_name=construction_number,
-                qty=orderitem_qty,
-                element_name=element_name,
-                width=width,
-                height=height,
-                glass_orderitems_id=glass_orderitems_id,
-                order_id=order_id,
-                total_items_in_order=total_items_in_order,
-                approved_items_in_order=approved_items_in_order
-            )
-        )
         
     except ValueError as e:
         return ApprovalResponse(
