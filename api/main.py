@@ -809,11 +809,6 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
 
             # Устанавливаем статус только если он еще не "Completed" (4)
             if current_orderstateid != 4:
-                # Получаем следующий ID для ORDERSTATESREG
-                get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
-                next_id_result = db.execute_query(get_next_id_query)
-                next_id = (next_id_result[0]['MAXID'] or 0) + 1
-
                 # Получаем максимальную позицию состояния для данного заказа
                 get_max_posit_query = """
                     SELECT MAX(stateposit) as MAXPOSIT
@@ -823,14 +818,14 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
                 max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
                 next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
 
-                # Добавляем запись в ORDERSTATESREG
+                # Добавляем запись в ORDERSTATESREG, используя генератор для ID
                 # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
                 insert_state_query = """
                     INSERT INTO orderstatesreg
                     (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
-                    VALUES (?, ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+                    VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
                 """
-                db.execute_update(insert_state_query, (next_id, order_id, next_posit))
+                db.execute_update(insert_state_query, (order_id, next_posit))
 
                 # Обновляем состояние заказа
                 update_order_state_query = """
@@ -940,11 +935,6 @@ async def process_order_barcode(barcode: str) -> ApprovalResponse:
 
     # Переводим заказ в статус "Отгружен" (ID=5)
     try:
-        # Получаем следующий ID для ORDERSTATESREG
-        get_next_id_query = "SELECT MAX(orderstatesregid) as MAXID FROM orderstatesreg"
-        next_id_result = db.execute_query(get_next_id_query)
-        next_id = (next_id_result[0]['MAXID'] or 0) + 1
-
         # Получаем максимальную позицию состояния для данного заказа
         get_max_posit_query = """
             SELECT MAX(stateposit) as MAXPOSIT
@@ -954,14 +944,14 @@ async def process_order_barcode(barcode: str) -> ApprovalResponse:
         max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
         next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
 
-        # Добавляем запись в ORDERSTATESREG
+        # Добавляем запись в ORDERSTATESREG, используя генератор для ID
         # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
         insert_state_query = """
             INSERT INTO orderstatesreg
             (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
-            VALUES (?, ?, 5, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса "Отгружен" после сканирования штрихкода заказа')
+            VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 5, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса "Отгружен" после сканирования штрихкода заказа')
         """
-        db.execute_update(insert_state_query, (next_id, order_id, next_posit))
+        db.execute_update(insert_state_query, (order_id, next_posit))
 
         # Обновляем состояние заказа
         update_order_state_query = """
