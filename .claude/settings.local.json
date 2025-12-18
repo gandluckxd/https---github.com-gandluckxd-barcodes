@@ -44,7 +44,12 @@
       "Bash(cat:*)",
       "Bash(d:barcodesapivenvScriptspython.exe -m py_compile main.py)",
       "Bash(d:barcodesapivenvScriptspython.exe -m py_compile models.py)",
-      "Bash(git restore:*)"
+      "Bash(git restore:*)",
+      "Bash(d:\\\\barcodes\\\\api\\\\venv\\\\Scripts\\\\python.exe -m py_compile:*)",
+      "Bash(./api/venv/Scripts/python.exe:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
