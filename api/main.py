@@ -433,8 +433,8 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
 
         return ApprovalResponse(
             success=False,
-            message=f"Набор уже был отмечен готовым{date_str}",
-            voice_message="Набор уже был отмечен готовым",
+            message=f"Набор уже было отмечено готовым{date_str}",
+            voice_message="Набор уже было отмечено готовым",
             product_info=ProductInfo(
                 order_number=order_number,
                 proddate=proddate,
