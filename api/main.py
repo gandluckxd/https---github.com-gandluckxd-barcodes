@@ -35,12 +35,15 @@ def parse_barcode(barcode: str) -> dict:
     Парсинг штрихкода с определением типа
 
     Форматы:
-    - IZD-123456789: изделие (9 цифр после префикса)
+    - D-123456789: изделие (9 цифр после префикса)
     - ORD-12345: заказ (ID заказа)
-    - ITM-12345: материал (ID материала - itemsdetailid)
-    - SET-12345: набор (ID набора - itemssetid)
+    - T-12345: материал (ID материала - itemsdetailid)
+    - S-12345: набор (ID набора - itemssetid)
     - 123456789: старый формат изделия (9 цифр)
     - 12345: старый формат заказа (не 9 цифр)
+
+    Для обратной совместимости также поддерживаются старые префиксы:
+    - IZD-123456789, ITM-12345, SET-12345
 
     Returns:
         dict: {
@@ -50,7 +53,7 @@ def parse_barcode(barcode: str) -> dict:
     """
     barcode = barcode.strip().upper()
 
-    # Проверка на наличие префикса (формат XXX-...)
+    # Проверка на наличие префикса (формат X-... или XXX-...)
     if '-' in barcode:
         parts = barcode.split('-', 1)
         if len(parts) == 2:
@@ -58,11 +61,18 @@ def parse_barcode(barcode: str) -> dict:
             prefix = prefix.strip()
             value = value.strip()
 
-            if prefix in ['IZD', 'ORD', 'ITM', 'SET']:
-                return {
-                    'type': prefix,
-                    'value': value
-                }
+            # Новые префиксы
+            if prefix == 'D':
+                return {'type': 'IZD', 'value': value}
+            elif prefix == 'ORD':
+                return {'type': 'ORD', 'value': value}
+            elif prefix == 'T':
+                return {'type': 'ITM', 'value': value}
+            elif prefix == 'S':
+                return {'type': 'SET', 'value': value}
+            # Старые префиксы (обратная совместимость)
+            elif prefix in ['IZD', 'ITM', 'SET']:
+                return {'type': prefix, 'value': value}
 
     # Старый формат без префикса
     if barcode.isdigit():
@@ -86,7 +96,7 @@ def parse_barcode(barcode: str) -> dict:
 
 async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
     """
-    Обработка штрихкода материала (префикс ITM)
+    Обработка штрихкода материала (префикс T или ITM)
     Поиск CT_ELEMENTS по полю ITEMSDETAILID
 
     Args:
@@ -284,7 +294,7 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
 
 async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
     """
-    Обработка штрихкода набора (префикс SET)
+    Обработка штрихкода набора (префикс S или SET)
     Поиск CT_ELEMENTS по полю ITEMSSETSID
 
     Args:
@@ -391,26 +401,25 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
                 proddate = proddate_obj.strftime('%d.%m.%Y')
             order_id = order_data['ORDERID']
 
-            # Получаем статистику по заказу
+            # Получаем статистику по заказу (используем CT_WHDETAIL.isapproved)
             query_stats = """
                 SELECT
-                    COUNT(*) as TOTAL_ITEMS,
-                    SUM(CASE WHEN oi.ISAPPROVED = 1 THEN 1 ELSE 0 END) as APPROVED_ITEMS
-                FROM ORDERITEMS oi
-                WHERE oi.ORDERID = ?
-                    AND oi.ORDERITEMSID IN (
-                        SELECT DISTINCT ORDERITEMSID
-                        FROM CT_ELEMENTS
-                        WHERE ORDERITEMSID IS NOT NULL
-                    )
+                    SUM(wd.qty) as TOTAL,
+                    SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
+                FROM ORDERS o
+                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
+                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
+                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                WHERE o.ORDERID = ?
+                AND el.CTTYPEELEMSID = 2
             """
 
             stats_result = db.execute_query(query_stats, (order_id,))
 
             if stats_result:
-                stats_data = stats_result[0]
-                total_items_in_order = stats_data['TOTAL_ITEMS']
-                approved_items_in_order = stats_data['APPROVED_ITEMS']
+                total_items_in_order = stats_result[0]['TOTAL'] if stats_result[0]['TOTAL'] else 0
+                approved_items_in_order = stats_result[0]['APPROVED'] if stats_result[0]['APPROVED'] else 0
 
     # Проверяем, не приходованы ли уже ВСЕ записи
     already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
@@ -499,7 +508,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
 
 async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
     """
-    Обработка штрихкода изделия (префикс IZD или старый формат 9 цифр)
+    Обработка штрихкода изделия (префикс D, IZD или старый формат 9 цифр)
 
     Формат: [номер изделия (2 цифры)][ORDERITEMSID стеклопакета (7 цифр)]
     - Первые 2 цифры - номер изделия (01, 02, ... 15...)
@@ -1031,22 +1040,23 @@ async def process_barcode(request: BarcodeRequest):
     Обработка штрихкода и приходование изделия
 
     Поддерживаемые форматы:
-    1. IZD-123456789: Штрихкод изделия (9 цифр после префикса)
+    1. D-123456789: Штрихкод изделия (9 цифр после префикса)
        - Первые 2 цифры: номер изделия (01, 02, ...)
        - Остальные 7 цифр: ORDERITEMSID стеклопакета
 
     2. ORD-12345: Штрихкод заказа (ID заказа)
        - Переводит заказ из статуса "Готов" в статус "Отгружен"
 
-    3. ITM-12345: Штрихкод материала (ID материала - itemsdetailid)
+    3. T-12345: Штрихкод материала (ID материала - itemsdetailid)
        - Поиск CT_ELEMENTS по полю ITEMSDETAILID
 
-    4. SET-12345: Штрихкод набора (ID набора - itemssetid)
+    4. S-12345: Штрихкод набора (ID набора - itemssetid)
        - Поиск CT_ELEMENTS по полю ITEMSSETSID
 
     Старые форматы (обратная совместимость):
-    - 123456789 (9 цифр): обрабатывается как IZD
-    - 12345 (не 9 цифр): обрабатывается как ORD
+    - IZD-123456789, ITM-12345, SET-12345 (старые префиксы)
+    - 123456789 (9 цифр): обрабатывается как D-123456789
+    - 12345 (не 9 цифр): обрабатывается как ORD-12345
     """
     try:
         barcode = request.barcode.strip()
