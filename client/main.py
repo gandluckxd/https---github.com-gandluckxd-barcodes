@@ -10,7 +10,7 @@ import pygame
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QLineEdit, QPushButton, QTableWidget, QTableWidgetItem,
-    QGroupBox, QHeaderView, QTabWidget, QMessageBox
+    QGroupBox, QHeaderView, QTabWidget, QMessageBox, QSplitter
 )
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QObject
 from PyQt5.QtGui import QFont, QColor, QIcon, QPixmap, QImage
@@ -393,45 +393,54 @@ class BarcodeApp(QMainWindow):
         """Создание вкладки со статистикой производства"""
         tab = QWidget()
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(5, 0, 5, 0)  # Убираем верхние и нижние отступы
+        main_layout.setSpacing(0)  # Убираем расстояние между элементами
         tab.setLayout(main_layout)
 
         # === Заголовок ===
         title_label = QLabel("📊 Статистика производства")
         title_font = QFont()
-        title_font.setPointSize(36)
+        title_font.setPointSize(28)
         title_font.setBold(True)
         title_label.setFont(title_font)
         title_label.setAlignment(Qt.AlignCenter)
+        title_label.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(title_label)
 
         # === Информация о периоде ===
         period_label = QLabel("Отображается период: 2 дня назад - 5 дней вперёд")
         period_font = QFont()
-        period_font.setPointSize(18)
+        period_font.setPointSize(14)
         period_label.setFont(period_font)
         period_label.setAlignment(Qt.AlignCenter)
+        period_label.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(period_label)
 
         # === Метка последнего обновления ===
         self.last_update_label = QLabel("Загрузка данных...")
         update_font = QFont()
-        update_font.setPointSize(16)
+        update_font.setPointSize(14)
         update_font.setItalic(True)
         self.last_update_label.setFont(update_font)
         self.last_update_label.setAlignment(Qt.AlignCenter)
         self.last_update_label.setStyleSheet("color: gray;")
+        self.last_update_label.setContentsMargins(0, 0, 0, 0)
         main_layout.addWidget(self.last_update_label)
 
         # === Кнопка обновления ===
         refresh_btn = QPushButton("🔄 Обновить статистику")
         refresh_btn.clicked.connect(self.start_background_stats_loading)
-        refresh_btn.setMinimumHeight(60)
+        refresh_btn.setMinimumHeight(50)
         btn_font = QFont()
-        btn_font.setPointSize(20)
+        btn_font.setPointSize(18)
         btn_font.setBold(True)
         refresh_btn.setFont(btn_font)
         refresh_btn.setFocusPolicy(Qt.NoFocus)
         main_layout.addWidget(refresh_btn)
+
+        # === Создаем QSplitter для разделения таблиц ===
+        splitter = QSplitter(Qt.Horizontal)
+        main_layout.addWidget(splitter, 1)  # Stretch factor = 1, чтобы занять всё доступное место
 
         # === Общая статистика по дням ===
         daily_group = QGroupBox("Общая статистика по дням")
@@ -445,7 +454,7 @@ class BarcodeApp(QMainWindow):
         self.daily_stats_table = QTableWidget()
         self.daily_stats_table.setColumnCount(7)
         self.daily_stats_table.setHorizontalHeaderLabels([
-            "Дата", "План ПВХ", "Сделано ПВХ", "План Раздвижки", "Сделано Раздвижки", "План Итого", "Сделано Итого"
+            "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "П.Итого", "С.Итого"
         ])
 
         # Настройка шрифтов таблицы
@@ -469,7 +478,7 @@ class BarcodeApp(QMainWindow):
         self.daily_stats_table.setFocusPolicy(Qt.NoFocus)
 
         daily_layout.addWidget(self.daily_stats_table)
-        main_layout.addWidget(daily_group)
+        splitter.addWidget(daily_group)
 
         # === Детальная статистика по заказам ===
         order_group = QGroupBox("Детальная статистика по заказам")
@@ -483,8 +492,7 @@ class BarcodeApp(QMainWindow):
         self.order_stats_table = QTableWidget()
         self.order_stats_table.setColumnCount(7)
         self.order_stats_table.setHorizontalHeaderLabels([
-            "Номер заказа", "Дата производства", "План ПВХ", "Сделано ПВХ",
-            "План Раздвижки", "Сделано Раздвижки", "Комментарий"
+            "Заказ", "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "Коммент."
         ])
 
         # Настройка шрифтов таблицы
@@ -494,8 +502,10 @@ class BarcodeApp(QMainWindow):
         header2.setFont(header_font)
 
         # Автоматический размер колонок
-        for i in range(7):
+        for i in range(6):
             header2.setSectionResizeMode(i, QHeaderView.ResizeToContents)
+        # Последний столбец "Коммент." растягивается на всё оставшееся место
+        header2.setSectionResizeMode(6, QHeaderView.Stretch)
 
         self.order_stats_table.verticalHeader().setDefaultSectionSize(55)
         self.order_stats_table.setAlternatingRowColors(True)
@@ -503,7 +513,10 @@ class BarcodeApp(QMainWindow):
         self.order_stats_table.setFocusPolicy(Qt.NoFocus)
 
         order_layout.addWidget(self.order_stats_table)
-        main_layout.addWidget(order_group)
+        splitter.addWidget(order_group)
+
+        # Устанавливаем начальное соотношение размеров (50/50)
+        splitter.setSizes([500, 500])
 
         return tab
 

@@ -49,7 +49,11 @@
       "Bash(./api/venv/Scripts/python.exe:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(d:barcodesapivenvScriptspython.exe d:barcodesapimain.py)",
+      "Bash(/d/barcodes/api/venv/Scripts/python.exe:*)",
+      "Bash(d:\\\\barcodes\\\\client\\\\venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(venvScriptspython.exe -m py_compile main.py)"
     ],
     "deny": [],
     "ask": []
