@@ -53,7 +53,10 @@
       "Bash(d:barcodesapivenvScriptspython.exe d:barcodesapimain.py)",
       "Bash(/d/barcodes/api/venv/Scripts/python.exe:*)",
       "Bash(d:\\\\barcodes\\\\client\\\\venv\\\\Scripts\\\\python.exe:*)",
-      "Bash(venvScriptspython.exe -m py_compile main.py)"
+      "Bash(venvScriptspython.exe -m py_compile main.py)",
+      "Bash(d:\\\\barcodes\\\\api\\\\venv\\\\Scripts\\\\python.exe:*)",
+      "Bash(./client/venv/Scripts/python.exe:*)",
+      "Bash(d:\\\\barcodes\\\\client\\\\venv\\\\Scripts\\\\python.exe -m py_compile:*)"
     ],
     "deny": [],
     "ask": []

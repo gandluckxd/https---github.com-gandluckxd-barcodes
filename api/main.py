@@ -1166,13 +1166,21 @@ async def get_daily_statistics(
                     THEN 1 ELSE 0
                 END) AS planned_razdv,
                 SUM(CASE
+                    WHEN rs.rsystemid = 28
+                    THEN 1 ELSE 0
+                END) AS planned_glass,
+                SUM(CASE
                     WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27 AND wd.isapproved = 1
                     THEN 1 ELSE 0
                 END) AS completed_pvh,
                 SUM(CASE
                     WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
                     THEN 1 ELSE 0
-                END) AS completed_razdv
+                END) AS completed_razdv,
+                SUM(CASE
+                    WHEN rs.rsystemid = 28 AND wd.isapproved = 1
+                    THEN 1 ELSE 0
+                END) AS completed_glass
             FROM orders o
             JOIN orderitems oi ON oi.orderid = o.orderid
             JOIN models m ON m.orderitemsid = oi.orderitemsid
@@ -1201,14 +1209,18 @@ async def get_daily_statistics(
                 daily_dict[proddate] = {
                     'planned_pvh': 0,
                     'planned_razdv': 0,
+                    'planned_glass': 0,
                     'completed_pvh': 0,
-                    'completed_razdv': 0
+                    'completed_razdv': 0,
+                    'completed_glass': 0
                 }
 
             daily_dict[proddate]['planned_pvh'] += row.get('PLANNED_PVH', 0) or 0
             daily_dict[proddate]['planned_razdv'] += row.get('PLANNED_RAZDV', 0) or 0
+            daily_dict[proddate]['planned_glass'] += row.get('PLANNED_GLASS', 0) or 0
             daily_dict[proddate]['completed_pvh'] += row.get('COMPLETED_PVH', 0) or 0
             daily_dict[proddate]['completed_razdv'] += row.get('COMPLETED_RAZDV', 0) or 0
+            daily_dict[proddate]['completed_glass'] += row.get('COMPLETED_GLASS', 0) or 0
 
         # Преобразование в список
         daily_stats = [
@@ -1216,8 +1228,10 @@ async def get_daily_statistics(
                 proddate=date,
                 planned_pvh=stats['planned_pvh'],
                 planned_razdv=stats['planned_razdv'],
+                planned_glass=stats['planned_glass'],
                 completed_pvh=stats['completed_pvh'],
-                completed_razdv=stats['completed_razdv']
+                completed_razdv=stats['completed_razdv'],
+                completed_glass=stats['completed_glass']
             )
             for date, stats in sorted(daily_dict.items())
         ]
@@ -1296,13 +1310,21 @@ async def get_order_statistics(
                     THEN 1 ELSE 0
                 END) AS planned_razdv,
                 SUM(CASE
+                    WHEN rs.rsystemid = 28
+                    THEN 1 ELSE 0
+                END) AS planned_glass,
+                SUM(CASE
                     WHEN rs.systemtype = 0 AND rs.rsystemid <> 8 AND rs.rsystemid <> 27 AND wd.isapproved = 1
                     THEN 1 ELSE 0
                 END) AS completed_pvh,
                 SUM(CASE
                     WHEN ((rs.systemtype = 1) OR (rs.rsystemid = 8)) AND wd.isapproved = 1
                     THEN 1 ELSE 0
-                END) AS completed_razdv
+                END) AS completed_razdv,
+                SUM(CASE
+                    WHEN rs.rsystemid = 28 AND wd.isapproved = 1
+                    THEN 1 ELSE 0
+                END) AS completed_glass
             FROM orders o
             JOIN orderitems oi ON oi.orderid = o.orderid
             JOIN models m ON m.orderitemsid = oi.orderitemsid
@@ -1335,8 +1357,10 @@ async def get_order_statistics(
                 proddate=proddate,
                 planned_pvh=row.get('PLANNED_PVH', 0) or 0,
                 planned_razdv=row.get('PLANNED_RAZDV', 0) or 0,
+                planned_glass=row.get('PLANNED_GLASS', 0) or 0,
                 completed_pvh=row.get('COMPLETED_PVH', 0) or 0,
                 completed_razdv=row.get('COMPLETED_RAZDV', 0) or 0,
+                completed_glass=row.get('COMPLETED_GLASS', 0) or 0,
                 comment=rcomment
             ))
 

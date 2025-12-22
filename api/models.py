@@ -79,8 +79,10 @@ class DailyStatsRow(BaseModel):
     proddate: str = Field(..., description="Дата производства")
     planned_pvh: int = Field(0, description="Запланировано изделий ПВХ")
     planned_razdv: int = Field(0, description="Запланировано изделий раздвижки")
+    planned_glass: int = Field(0, description="Запланировано стеклопакетов (отдельно проданных, rsystemid=28)")
     completed_pvh: int = Field(0, description="Изготовлено изделий ПВХ (ISAPPROVED=1)")
     completed_razdv: int = Field(0, description="Изготовлено изделий раздвижки (ISAPPROVED=1)")
+    completed_glass: int = Field(0, description="Изготовлено стеклопакетов (отдельно проданных, rsystemid=28, ISAPPROVED=1)")
 
 
 class DailyStatsResponse(BaseModel):
@@ -96,8 +98,10 @@ class OrderStatsRow(BaseModel):
     proddate: str = Field(..., description="Дата производства")
     planned_pvh: int = Field(0, description="Количество изделий ПВХ")
     planned_razdv: int = Field(0, description="Количество изделий раздвижки")
+    planned_glass: int = Field(0, description="Количество стеклопакетов (отдельно проданных, rsystemid=28)")
     completed_pvh: int = Field(0, description="Готовых изделий ПВХ (ISAPPROVED=1)")
     completed_razdv: int = Field(0, description="Готовых изделий раздвижки (ISAPPROVED=1)")
+    completed_glass: int = Field(0, description="Готовых стеклопакетов (отдельно проданных, rsystemid=28, ISAPPROVED=1)")
     comment: Optional[str] = Field(None, description="Комментарий из ORDERS.RCOMMENT")
 
 

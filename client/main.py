@@ -194,13 +194,16 @@ class BarcodeApp(QMainWindow):
         # История сканирований
         self.scan_history = []
 
-        # Статистика
+        # Статистика за сегодня
         self.stats = {
             'total': 0,
             'success': 0,
             'failed': 0,
             'already_approved': 0
         }
+
+        # Дата для отслеживания смены дня
+        self.current_date = datetime.now().date()
 
         # Данные статистики
         self.daily_stats_data = []
@@ -317,8 +320,8 @@ class BarcodeApp(QMainWindow):
 
         main_layout.addWidget(barcode_group)
 
-        # === Статистика ===
-        stats_group = QGroupBox("Статистика")
+        # === Статистика за сегодня ===
+        stats_group = QGroupBox("Статистика за сегодня")
         stats_group_font = QFont()
         stats_group_font.setPointSize(24)
         stats_group_font.setBold(True)
@@ -452,9 +455,9 @@ class BarcodeApp(QMainWindow):
         daily_group.setLayout(daily_layout)
 
         self.daily_stats_table = QTableWidget()
-        self.daily_stats_table.setColumnCount(7)
+        self.daily_stats_table.setColumnCount(9)
         self.daily_stats_table.setHorizontalHeaderLabels([
-            "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "П.Итого", "С.Итого"
+            "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "П.Стекл", "С.Стекл", "П.Итого", "С.Итого"
         ])
 
         # Настройка шрифтов таблицы
@@ -469,7 +472,7 @@ class BarcodeApp(QMainWindow):
         header.setFont(header_font)
 
         # Автоматический размер колонок
-        for i in range(7):
+        for i in range(9):
             header.setSectionResizeMode(i, QHeaderView.ResizeToContents)
 
         self.daily_stats_table.verticalHeader().setDefaultSectionSize(55)
@@ -490,9 +493,9 @@ class BarcodeApp(QMainWindow):
         order_group.setLayout(order_layout)
 
         self.order_stats_table = QTableWidget()
-        self.order_stats_table.setColumnCount(7)
+        self.order_stats_table.setColumnCount(9)
         self.order_stats_table.setHorizontalHeaderLabels([
-            "Заказ", "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "Коммент."
+            "Заказ", "Дата", "П.ПВХ", "С.ПВХ", "П.Рзд", "С.Рзд", "П.Стекл", "С.Стекл", "Коммент."
         ])
 
         # Настройка шрифтов таблицы
@@ -502,10 +505,10 @@ class BarcodeApp(QMainWindow):
         header2.setFont(header_font)
 
         # Автоматический размер колонок
-        for i in range(6):
+        for i in range(8):
             header2.setSectionResizeMode(i, QHeaderView.ResizeToContents)
         # Последний столбец "Коммент." растягивается на всё оставшееся место
-        header2.setSectionResizeMode(6, QHeaderView.Stretch)
+        header2.setSectionResizeMode(8, QHeaderView.Stretch)
 
         self.order_stats_table.verticalHeader().setDefaultSectionSize(55)
         self.order_stats_table.setAlternatingRowColors(True)
@@ -663,14 +666,31 @@ class BarcodeApp(QMainWindow):
                     completed_razdv_item.setForeground(QColor(255, 165, 0))  # Оранжевый
             self.daily_stats_table.setItem(row_position, 4, completed_razdv_item)
 
-            # Итого План (колонка 5) - сумма ПВХ и Раздвижки
-            total_planned = planned_pvh + planned_razdv
+            # План Стеклопакетов (колонка 5)
+            planned_glass = row_data.get('planned_glass', 0)
+            planned_glass_item = QTableWidgetItem(str(planned_glass))
+            planned_glass_item.setTextAlignment(Qt.AlignCenter)
+            self.daily_stats_table.setItem(row_position, 5, planned_glass_item)
+
+            # Сделано Стеклопакетов (колонка 6) с цветовой индикацией
+            completed_glass = row_data.get('completed_glass', 0)
+            completed_glass_item = QTableWidgetItem(str(completed_glass))
+            completed_glass_item.setTextAlignment(Qt.AlignCenter)
+            if planned_glass > 0:
+                if completed_glass >= planned_glass:
+                    completed_glass_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif completed_glass > 0:
+                    completed_glass_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.daily_stats_table.setItem(row_position, 6, completed_glass_item)
+
+            # Итого План (колонка 7) - сумма ПВХ, Раздвижки и Стеклопакетов
+            total_planned = planned_pvh + planned_razdv + planned_glass
             total_planned_item = QTableWidgetItem(str(total_planned))
             total_planned_item.setTextAlignment(Qt.AlignCenter)
-            self.daily_stats_table.setItem(row_position, 5, total_planned_item)
+            self.daily_stats_table.setItem(row_position, 7, total_planned_item)
 
-            # Итого Сделано (колонка 6) - сумма ПВХ и Раздвижки с цветовой индикацией
-            total_completed = completed_pvh + completed_razdv
+            # Итого Сделано (колонка 8) - сумма ПВХ, Раздвижки и Стеклопакетов с цветовой индикацией
+            total_completed = completed_pvh + completed_razdv + completed_glass
             total_completed_item = QTableWidgetItem(str(total_completed))
             total_completed_item.setTextAlignment(Qt.AlignCenter)
             if total_planned > 0:
@@ -678,7 +698,7 @@ class BarcodeApp(QMainWindow):
                     total_completed_item.setForeground(QColor(0, 200, 0))  # Зеленый
                 elif total_completed > 0:
                     total_completed_item.setForeground(QColor(255, 165, 0))  # Оранжевый
-            self.daily_stats_table.setItem(row_position, 6, total_completed_item)
+            self.daily_stats_table.setItem(row_position, 8, total_completed_item)
 
     def populate_order_stats_table(self, data):
         """Заполнение таблицы детальной статистики"""
@@ -737,11 +757,26 @@ class BarcodeApp(QMainWindow):
                     completed_razdv_item.setForeground(QColor(255, 165, 0))  # Оранжевый
             self.order_stats_table.setItem(row_position, 5, completed_razdv_item)
 
-            # Комментарий (колонка 6)
+            # План Стеклопакетов (колонка 6)
+            planned_glass_item = QTableWidgetItem(str(row_data.get('planned_glass', 0)))
+            planned_glass_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 6, planned_glass_item)
+
+            # Сделано Стеклопакетов (колонка 7) с цветовой индикацией
+            completed_glass_item = QTableWidgetItem(str(row_data.get('completed_glass', 0)))
+            completed_glass_item.setTextAlignment(Qt.AlignCenter)
+            if row_data.get('planned_glass', 0) > 0:
+                if row_data.get('completed_glass', 0) >= row_data.get('planned_glass', 0):
+                    completed_glass_item.setForeground(QColor(0, 200, 0))  # Зеленый
+                elif row_data.get('completed_glass', 0) > 0:
+                    completed_glass_item.setForeground(QColor(255, 165, 0))  # Оранжевый
+            self.order_stats_table.setItem(row_position, 7, completed_glass_item)
+
+            # Комментарий (колонка 8)
             comment = row_data.get('comment', '') or ''
             comment_item = QTableWidgetItem(comment.strip())
             comment_item.setTextAlignment(Qt.AlignCenter)
-            self.order_stats_table.setItem(row_position, 6, comment_item)
+            self.order_stats_table.setItem(row_position, 8, comment_item)
 
     def show_error(self, title, message):
         """Показать диалог с ошибкой"""
@@ -810,13 +845,24 @@ class BarcodeApp(QMainWindow):
     def process_barcode(self):
         """Обработка штрихкода"""
         barcode = self.barcode_input.text().strip()
-        
+
         if not barcode:
             return
-        
+
         # Очищаем поле ввода
         self.barcode_input.clear()
-        
+
+        # Проверяем, не сменился ли день - если да, сбрасываем статистику
+        today = datetime.now().date()
+        if today != self.current_date:
+            self.current_date = today
+            self.stats = {
+                'total': 0,
+                'success': 0,
+                'failed': 0,
+                'already_approved': 0
+            }
+
         # Обновляем статистику
         self.stats['total'] += 1
         
