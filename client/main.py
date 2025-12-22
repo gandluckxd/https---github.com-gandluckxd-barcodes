@@ -625,15 +625,20 @@ class BarcodeApp(QMainWindow):
             except:
                 formatted_date = proddate
 
-            self.daily_stats_table.setItem(row_position, 0, QTableWidgetItem(formatted_date))
+            date_item = QTableWidgetItem(formatted_date)
+            date_item.setTextAlignment(Qt.AlignCenter)
+            self.daily_stats_table.setItem(row_position, 0, date_item)
 
             # План ПВХ (колонка 1)
             planned_pvh = row_data['planned_pvh']
-            self.daily_stats_table.setItem(row_position, 1, QTableWidgetItem(str(planned_pvh)))
+            planned_pvh_item = QTableWidgetItem(str(planned_pvh))
+            planned_pvh_item.setTextAlignment(Qt.AlignCenter)
+            self.daily_stats_table.setItem(row_position, 1, planned_pvh_item)
 
             # Сделано ПВХ (колонка 2) с цветовой индикацией
             completed_pvh = row_data['completed_pvh']
             completed_pvh_item = QTableWidgetItem(str(completed_pvh))
+            completed_pvh_item.setTextAlignment(Qt.AlignCenter)
             if planned_pvh > 0:
                 if completed_pvh >= planned_pvh:
                     completed_pvh_item.setForeground(QColor(0, 200, 0))  # Зеленый
@@ -643,11 +648,14 @@ class BarcodeApp(QMainWindow):
 
             # План Раздвижки (колонка 3)
             planned_razdv = row_data['planned_razdv']
-            self.daily_stats_table.setItem(row_position, 3, QTableWidgetItem(str(planned_razdv)))
+            planned_razdv_item = QTableWidgetItem(str(planned_razdv))
+            planned_razdv_item.setTextAlignment(Qt.AlignCenter)
+            self.daily_stats_table.setItem(row_position, 3, planned_razdv_item)
 
             # Сделано Раздвижки (колонка 4) с цветовой индикацией
             completed_razdv = row_data['completed_razdv']
             completed_razdv_item = QTableWidgetItem(str(completed_razdv))
+            completed_razdv_item.setTextAlignment(Qt.AlignCenter)
             if planned_razdv > 0:
                 if completed_razdv >= planned_razdv:
                     completed_razdv_item.setForeground(QColor(0, 200, 0))  # Зеленый
@@ -657,11 +665,14 @@ class BarcodeApp(QMainWindow):
 
             # Итого План (колонка 5) - сумма ПВХ и Раздвижки
             total_planned = planned_pvh + planned_razdv
-            self.daily_stats_table.setItem(row_position, 5, QTableWidgetItem(str(total_planned)))
+            total_planned_item = QTableWidgetItem(str(total_planned))
+            total_planned_item.setTextAlignment(Qt.AlignCenter)
+            self.daily_stats_table.setItem(row_position, 5, total_planned_item)
 
             # Итого Сделано (колонка 6) - сумма ПВХ и Раздвижки с цветовой индикацией
             total_completed = completed_pvh + completed_razdv
             total_completed_item = QTableWidgetItem(str(total_completed))
+            total_completed_item.setTextAlignment(Qt.AlignCenter)
             if total_planned > 0:
                 if total_completed >= total_planned:
                     total_completed_item.setForeground(QColor(0, 200, 0))  # Зеленый
@@ -678,7 +689,9 @@ class BarcodeApp(QMainWindow):
             self.order_stats_table.insertRow(row_position)
 
             # Номер заказа (колонка 0)
-            self.order_stats_table.setItem(row_position, 0, QTableWidgetItem(row_data['order_number']))
+            order_item = QTableWidgetItem(row_data['order_number'])
+            order_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 0, order_item)
 
             # Дата производства (колонка 1) - форматируем в день.месяц.год
             proddate = row_data['proddate']
@@ -690,13 +703,18 @@ class BarcodeApp(QMainWindow):
                     formatted_date = proddate
             except:
                 formatted_date = proddate
-            self.order_stats_table.setItem(row_position, 1, QTableWidgetItem(formatted_date))
+            date_item = QTableWidgetItem(formatted_date)
+            date_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 1, date_item)
 
             # План ПВХ (колонка 2)
-            self.order_stats_table.setItem(row_position, 2, QTableWidgetItem(str(row_data['planned_pvh'])))
+            planned_pvh_item = QTableWidgetItem(str(row_data['planned_pvh']))
+            planned_pvh_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 2, planned_pvh_item)
 
             # Сделано ПВХ (колонка 3) с цветовой индикацией
             completed_pvh_item = QTableWidgetItem(str(row_data['completed_pvh']))
+            completed_pvh_item.setTextAlignment(Qt.AlignCenter)
             if row_data['planned_pvh'] > 0:
                 if row_data['completed_pvh'] >= row_data['planned_pvh']:
                     completed_pvh_item.setForeground(QColor(0, 200, 0))  # Зеленый
@@ -705,10 +723,13 @@ class BarcodeApp(QMainWindow):
             self.order_stats_table.setItem(row_position, 3, completed_pvh_item)
 
             # План Раздвижки (колонка 4)
-            self.order_stats_table.setItem(row_position, 4, QTableWidgetItem(str(row_data['planned_razdv'])))
+            planned_razdv_item = QTableWidgetItem(str(row_data['planned_razdv']))
+            planned_razdv_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 4, planned_razdv_item)
 
             # Сделано Раздвижки (колонка 5) с цветовой индикацией
             completed_razdv_item = QTableWidgetItem(str(row_data['completed_razdv']))
+            completed_razdv_item.setTextAlignment(Qt.AlignCenter)
             if row_data['planned_razdv'] > 0:
                 if row_data['completed_razdv'] >= row_data['planned_razdv']:
                     completed_razdv_item.setForeground(QColor(0, 200, 0))  # Зеленый
@@ -718,7 +739,9 @@ class BarcodeApp(QMainWindow):
 
             # Комментарий (колонка 6)
             comment = row_data.get('comment', '') or ''
-            self.order_stats_table.setItem(row_position, 6, QTableWidgetItem(comment.strip()))
+            comment_item = QTableWidgetItem(comment.strip())
+            comment_item.setTextAlignment(Qt.AlignCenter)
+            self.order_stats_table.setItem(row_position, 6, comment_item)
 
     def show_error(self, title, message):
         """Показать диалог с ошибкой"""
@@ -907,6 +930,7 @@ class BarcodeApp(QMainWindow):
         # Статус (колонка 0)
         status_item = QTableWidgetItem(status)
         status_item.setForeground(status_color)
+        status_item.setTextAlignment(Qt.AlignCenter)
         font = QFont()
         font.setPointSize(19)
         font.setBold(True)
@@ -914,20 +938,28 @@ class BarcodeApp(QMainWindow):
         self.history_table.setItem(0, 0, status_item)
 
         # Штрихкод (колонка 1)
-        self.history_table.setItem(0, 1, QTableWidgetItem(barcode))
+        barcode_item = QTableWidgetItem(barcode)
+        barcode_item.setTextAlignment(Qt.AlignCenter)
+        self.history_table.setItem(0, 1, barcode_item)
 
         if product_info:
             # Заказ (колонка 2)
             order_num = product_info.get('order_number') or '-'
-            self.history_table.setItem(0, 2, QTableWidgetItem(order_num))
+            order_item = QTableWidgetItem(order_num)
+            order_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 2, order_item)
 
             # Дата производства (колонка 3)
             proddate = product_info.get('proddate') or '-'
-            self.history_table.setItem(0, 3, QTableWidgetItem(proddate))
+            proddate_item = QTableWidgetItem(proddate)
+            proddate_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 3, proddate_item)
 
             # Изделие (колонка 4)
             construction_num = product_info.get('construction_number') or '-'
-            self.history_table.setItem(0, 4, QTableWidgetItem(construction_num))
+            construction_item = QTableWidgetItem(construction_num)
+            construction_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 4, construction_item)
 
             # Номер № (колонка 5)
             item_number = product_info.get('item_number')
@@ -936,7 +968,9 @@ class BarcodeApp(QMainWindow):
                 item_num = f"{item_number} / {qty}"
             else:
                 item_num = "-"
-            self.history_table.setItem(0, 5, QTableWidgetItem(item_num))
+            item_num_item = QTableWidgetItem(item_num)
+            item_num_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 5, item_num_item)
 
             # Размеры (колонка 6)
             width = product_info.get('width', 0)
@@ -945,26 +979,30 @@ class BarcodeApp(QMainWindow):
                 size_str = f"{width} x {height}"
             else:
                 size_str = "-"
-            self.history_table.setItem(0, 6, QTableWidgetItem(size_str))
+            size_item = QTableWidgetItem(size_str)
+            size_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 6, size_item)
 
             # Кол-во изделий в заказе (колонка 7)
             total_items = product_info.get('total_items_in_order')
-            self.history_table.setItem(0, 7, QTableWidgetItem(str(total_items) if total_items is not None else "-"))
+            total_items_item = QTableWidgetItem(str(total_items) if total_items is not None else "-")
+            total_items_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 7, total_items_item)
 
             # Проведено изделий в заказе (колонка 8)
             approved_items = product_info.get('approved_items_in_order')
-            self.history_table.setItem(0, 8, QTableWidgetItem(str(approved_items) if approved_items is not None else "-"))
+            approved_items_item = QTableWidgetItem(str(approved_items) if approved_items is not None else "-")
+            approved_items_item.setTextAlignment(Qt.AlignCenter)
+            self.history_table.setItem(0, 8, approved_items_item)
         else:
-            self.history_table.setItem(0, 2, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 3, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 4, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 5, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 6, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 7, QTableWidgetItem("-"))
-            self.history_table.setItem(0, 8, QTableWidgetItem("-"))
+            for col in range(2, 9):
+                empty_item = QTableWidgetItem("-")
+                empty_item.setTextAlignment(Qt.AlignCenter)
+                self.history_table.setItem(0, col, empty_item)
 
         # Время (колонка 9)
         time_item = QTableWidgetItem(current_time)
+        time_item.setTextAlignment(Qt.AlignCenter)
         self.history_table.setItem(0, 9, time_item)
 
         # Ограничиваем историю до 100 записей
