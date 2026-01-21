@@ -56,7 +56,13 @@
       "Bash(venvScriptspython.exe -m py_compile main.py)",
       "Bash(d:\\\\barcodes\\\\api\\\\venv\\\\Scripts\\\\python.exe:*)",
       "Bash(./client/venv/Scripts/python.exe:*)",
-      "Bash(d:\\\\barcodes\\\\client\\\\venv\\\\Scripts\\\\python.exe -m py_compile:*)"
+      "Bash(d:\\\\barcodes\\\\client\\\\venv\\\\Scripts\\\\python.exe -m py_compile:*)",
+      "mcp__mcp-firebird__get-execution-plan",
+      "mcp__mcp-firebird__analyze-missing-indexes",
+      "mcp__mcp-firebird__describe-table",
+      "mcp__mcp-firebird__get-field-descriptions",
+      "mcp__mcp-firebird__list-tables",
+      "mcp__mcp-firebird__execute-query"
     ],
     "deny": [],
     "ask": []

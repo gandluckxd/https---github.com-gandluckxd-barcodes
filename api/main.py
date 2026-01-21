@@ -35,8 +35,8 @@ def parse_barcode(barcode: str) -> dict:
     Парсинг штрихкода с определением типа
 
     Форматы:
-    - D-123456789: изделие (9 цифр после префикса)
-    - ORD-12345: заказ (ID заказа)
+    - D-123456789 или B-123456789: изделие (9 цифр после префикса)
+    - ORD-12345 или R-12345: заказ (ID заказа)
     - T-12345: материал (ID материала - itemsdetailid)
     - S-12345: набор (ID набора - itemssetid)
     - 123456789: старый формат изделия (9 цифр)
@@ -62,9 +62,9 @@ def parse_barcode(barcode: str) -> dict:
             value = value.strip()
 
             # Новые префиксы
-            if prefix == 'D':
+            if prefix == 'D' or prefix == 'B':
                 return {'type': 'IZD', 'value': value}
-            elif prefix == 'ORD':
+            elif prefix == 'ORD' or prefix == 'R':
                 return {'type': 'ORD', 'value': value}
             elif prefix == 'T':
                 return {'type': 'ITM', 'value': value}
@@ -185,13 +185,11 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
                 SELECT
                     SUM(wd.qty) as TOTAL,
                     SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
-                FROM ORDERS o
-                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                FROM CT_WHDETAIL wd
+                JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+                LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
                 WHERE o.ORDERID = ?
-                AND el.CTTYPEELEMSID = 2
             """
             stats_result = db.execute_query(query_order_stats, (order_id,))
 
@@ -406,13 +404,11 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
                 SELECT
                     SUM(wd.qty) as TOTAL,
                     SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
-                FROM ORDERS o
-                JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-                JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-                LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+                FROM CT_WHDETAIL wd
+                JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+                LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+                LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
                 WHERE o.ORDERID = ?
-                AND el.CTTYPEELEMSID = 2
             """
 
             stats_result = db.execute_query(query_stats, (order_id,))
@@ -702,24 +698,20 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
         # Получаем статистику по заказу для уже приходованного изделия
         query_total_items = """
             SELECT SUM(wd.qty) as TOTAL
-            FROM ORDERS o
-            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            FROM CT_WHDETAIL wd
+            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
             WHERE o.ORDERID = ?
-            AND el.CTTYPEELEMSID = 2
         """
 
         query_approved_items = """
             SELECT SUM(wd.qty) as APPROVED
-            FROM ORDERS o
-            JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-            JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-            LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+            FROM CT_WHDETAIL wd
+            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+            LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
             WHERE o.ORDERID = ?
-            AND el.CTTYPEELEMSID = 2
             AND wd.ISAPPROVED = 1
         """
 
@@ -786,13 +778,11 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
             SUM(wd.qty) as TOTAL,
             SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
             COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
-        FROM ORDERS o
-        JOIN ORDERITEMS oi ON oi.ORDERID = o.ORDERID
-        JOIN MODELS m ON m.ORDERITEMSID = oi.ORDERITEMSID
-        LEFT JOIN CT_ELEMENTS el ON el.MODELID = m.MODELID
-        LEFT JOIN CT_WHDETAIL wd ON wd.CTELEMENTSID = el.CTELEMENTSID
+        FROM CT_WHDETAIL wd
+        JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+        LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+        LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
         WHERE o.ORDERID = ?
-        AND el.CTTYPEELEMSID = 2
     """
 
     stats_result = db.execute_query(query_order_stats, (order_id,))
@@ -1040,11 +1030,11 @@ async def process_barcode(request: BarcodeRequest):
     Обработка штрихкода и приходование изделия
 
     Поддерживаемые форматы:
-    1. D-123456789: Штрихкод изделия (9 цифр после префикса)
+    1. D-123456789 или B-123456789: Штрихкод изделия (9 цифр после префикса)
        - Первые 2 цифры: номер изделия (01, 02, ...)
        - Остальные 7 цифр: ORDERITEMSID стеклопакета
 
-    2. ORD-12345: Штрихкод заказа (ID заказа)
+    2. ORD-12345 или R-12345: Штрихкод заказа (ID заказа)
        - Переводит заказ из статуса "Готов" в статус "Отгружен"
 
     3. T-12345: Штрихкод материала (ID материала - itemsdetailid)
