@@ -187,9 +187,12 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
                     SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
                 FROM CT_WHDETAIL wd
                 JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+                LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+                LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
                 LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
                 LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
                 WHERE o.ORDERID = ?
+                AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
             """
             stats_result = db.execute_query(query_order_stats, (order_id,))
 
@@ -406,9 +409,12 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
                     SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
                 FROM CT_WHDETAIL wd
                 JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+                LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+                LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
                 LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
                 LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
                 WHERE o.ORDERID = ?
+                AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
             """
 
             stats_result = db.execute_query(query_stats, (order_id,))
@@ -700,19 +706,25 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
             SELECT SUM(wd.qty) as TOTAL
             FROM CT_WHDETAIL wd
             JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+            LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
             LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
             LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
             WHERE o.ORDERID = ?
+            AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
         """
 
         query_approved_items = """
             SELECT SUM(wd.qty) as APPROVED
             FROM CT_WHDETAIL wd
             JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+            LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
             LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
             LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
             WHERE o.ORDERID = ?
             AND wd.ISAPPROVED = 1
+            AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
         """
 
         total_items_result = db.execute_query(query_total_items, (order_id,))
@@ -780,9 +792,12 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
             COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
         FROM CT_WHDETAIL wd
         JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+        LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+        LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
         LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
         LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
         WHERE o.ORDERID = ?
+        AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
     """
 
     stats_result = db.execute_query(query_order_stats, (order_id,))
