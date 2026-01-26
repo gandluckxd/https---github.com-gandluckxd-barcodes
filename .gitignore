@@ -91,7 +91,6 @@ htmlcov/
 
 # PyInstaller
 *.manifest
-*.spec
 
 # Backup files
 *.bak
