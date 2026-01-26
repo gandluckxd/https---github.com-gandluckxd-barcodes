@@ -938,13 +938,52 @@ async def process_order_barcode(barcode: str) -> ApprovalResponse:
     current_state_id = order_data['ORDERSTATEID']
     current_state_name = order_data['STATE_NAME'].strip() if order_data['STATE_NAME'] else "Неизвестно"
 
+    # Уточняем статус заказа: готов / еще не готов / уже отгружен
+    if current_state_id == 5:
+        return ApprovalResponse(
+            success=False,
+            message=f"Заказ {order_number} уже отмечен отгруженным",
+            voice_message=f"Заказ {order_number} уже отгружен",
+            product_info=ProductInfo(
+                order_number=order_number,
+                proddate=None,
+                construction_number=None,
+                item_number=None,
+                orderitems_id=None,
+                orderitems_name=None,
+                qty=None,
+                element_name=None,
+                width=None,
+                height=None,
+                glass_orderitems_id=None,
+                order_id=order_id,
+                total_items_in_order=None,
+                approved_items_in_order=None
+            )
+        )
+
     # Проверяем, что заказ в статусе "Готов" (ID=4)
     if current_state_id != 4:
         return ApprovalResponse(
             success=False,
-            message=f"Заказ {order_number} в статусе '{current_state_name}'. Можно отгружать только заказы со статусом 'Готов'",
-            voice_message=f"Ошибка. Заказ {order_number} не готов к отгрузке",
-            product_info=None
+            message=f"Заказ {order_number} в статусе '{current_state_name}'. Заказ еще не готов к отгрузке",
+            voice_message=f"Заказ {order_number} еще не готов к отгрузке",
+            product_info=ProductInfo(
+                order_number=order_number,
+                proddate=None,
+                construction_number=None,
+                item_number=None,
+                orderitems_id=None,
+                orderitems_name=None,
+                qty=None,
+                element_name=None,
+                width=None,
+                height=None,
+                glass_orderitems_id=None,
+                order_id=order_id,
+                total_items_in_order=None,
+                approved_items_in_order=None
+            )
         )
 
     # Переводим заказ в статус "Отгружен" (ID=5)

@@ -908,16 +908,29 @@ class BarcodeApp(QMainWindow):
             print(f"  total_items_in_order: {product_info.get('total_items_in_order')}")
             print(f"  approved_items_in_order: {product_info.get('approved_items_in_order')}")
         
+        message_lower = message.lower()
+        is_already_ready = "уже было отмечено готовым" in message_lower
+        is_already_shipped = ("уже отмечен отгруженным" in message_lower) or ("уже отгружен" in message_lower)
+        is_not_ready = "еще не готов" in message_lower
+
         if success:
             self.stats['success'] += 1
             status = "✅ Успех"
             status_color = QColor(0, 200, 0)
         else:
-            # Проверяем, это уже приходованное изделие или ошибка
-            if "уже было отмечено готовым" in message.lower():
+            # Проверяем, это уже приходованное изделие, уже отгруженный заказ или ошибка
+            if is_already_ready:
                 self.stats['already_approved'] += 1
                 status = "⚠️ Уже оприходовано"
                 status_color = QColor(255, 165, 0)
+            elif is_already_shipped:
+                self.stats['already_approved'] += 1
+                status = "⚠️ Уже отгружен"
+                status_color = QColor(255, 165, 0)
+            elif is_not_ready:
+                self.stats['failed'] += 1
+                status = "⏳ Еще не готов"
+                status_color = QColor(255, 0, 0)
             else:
                 self.stats['failed'] += 1
                 status = "❌ Ошибка"
@@ -935,7 +948,7 @@ class BarcodeApp(QMainWindow):
         # Воспроизводим соответствующий звук в отдельном потоке
         if success:
             sound_type = 'success'
-        elif "уже было отмечено готовым" in message.lower():
+        elif is_already_ready or is_already_shipped:
             sound_type = 'already_approved'
         else:
             sound_type = 'error'
