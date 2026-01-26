@@ -94,6 +94,92 @@ def parse_barcode(barcode: str) -> dict:
     }
 
 
+def get_order_stats(order_id):
+    if not order_id:
+        return None, None, None
+
+    # Единый запрос: все позиции заказа со складской записью (CT_WHDETAIL)
+    # Правила отбора:
+    # 1) Изделия: CTTYPEELEMSID = 2, исключаем москитку (MODELS.SYSPROFID = 27)
+    # 2) Наборы: CTTYPEELEMSID = 7 (все)
+    # 3) Материалы: CTTYPEELEMSID = 1 и тип материала в (50, 42, 65)
+    query_order_stats = """
+        SELECT
+            SUM(wd.qty) as TOTAL,
+            SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
+            COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
+        FROM CT_WHDETAIL wd
+        JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+        LEFT JOIN MODELS m ON el.MODELID = m.MODELID
+        LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
+        LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
+        LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+        LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
+        WHERE o.ORDERID = ?
+          AND (
+                (el.CTTYPEELEMSID = 2 AND COALESCE(m.SYSPROFID, 0) <> 27)
+             OR (el.CTTYPEELEMSID = 7)
+             OR (el.CTTYPEELEMSID = 1 AND gg.GGTYPEID IN (50, 42, 65))
+          )
+    """
+
+    stats_result = db.execute_query(query_order_stats, (order_id,))
+
+    total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
+    approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
+    not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
+
+    return total_items_in_order, approved_items_in_order, not_approved_count
+
+
+def check_and_update_order_ready(order_id, order_number=None):
+    if not order_id:
+        return False, None, None, None
+
+    total_items_in_order, approved_items_in_order, not_approved_count = get_order_stats(order_id)
+
+    all_approved = (not_approved_count == 0)
+    has_items = (total_items_in_order > 0)
+    order_ready = all_approved and has_items
+
+    if order_ready:
+        try:
+            current_state_query = """
+                SELECT orderstateid FROM orders WHERE orderid = ?
+            """
+            current_state = db.execute_query(current_state_query, (order_id,))
+            current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
+
+            if current_orderstateid != 4:
+                get_max_posit_query = """
+                    SELECT MAX(stateposit) as MAXPOSIT
+                    FROM orderstatesreg
+                    WHERE orderid = ?
+                """
+                max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
+                next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
+
+                insert_state_query = """
+                    INSERT INTO orderstatesreg
+                    (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+                    VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+                """
+                db.execute_update(insert_state_query, (order_id, next_posit))
+
+                update_order_state_query = """
+                    UPDATE orders
+                    SET orderstateid = 4
+                    WHERE orderid = ?
+                """
+                db.execute_update(update_order_state_query, (order_id,))
+
+                print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
+        except Exception as e:
+            print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+
+    return order_ready, total_items_in_order, approved_items_in_order, not_approved_count
+
+
 async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
     """
     Обработка штрихкода материала (префикс T или ITM)
@@ -181,25 +267,6 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
                     proddate = str(proddate_raw)
 
             # Получаем статистику по заказу
-            query_order_stats = """
-                SELECT
-                    SUM(wd.qty) as TOTAL,
-                    SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
-                FROM CT_WHDETAIL wd
-                JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
-                LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
-                LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
-                LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
-                WHERE o.ORDERID = ?
-                AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
-            """
-            stats_result = db.execute_query(query_order_stats, (order_id,))
-
-            if stats_result:
-                total_items_in_order = stats_result[0]['TOTAL'] if stats_result[0]['TOTAL'] else 0
-                approved_items_in_order = stats_result[0]['APPROVED'] if stats_result[0]['APPROVED'] else 0
-
     # Находим запись в CT_WHDETAIL
     query_whdetail = """
         SELECT
@@ -227,6 +294,7 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
     if whdetail_data['ISAPPROVED'] == 1:
         date_approved = whdetail_data['DATEAPPROVED']
         date_str = ""
+        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
@@ -269,6 +337,8 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
             voice_message="Ошибка при обновлении базы данных",
             product_info=None
         )
+
+    _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
 
     return ApprovalResponse(
         success=True,
@@ -403,26 +473,6 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
             order_id = order_data['ORDERID']
 
             # Получаем статистику по заказу (используем CT_WHDETAIL.isapproved)
-            query_stats = """
-                SELECT
-                    SUM(wd.qty) as TOTAL,
-                    SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED
-                FROM CT_WHDETAIL wd
-                JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
-                LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
-                LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
-                LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
-                LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
-                WHERE o.ORDERID = ?
-                AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
-            """
-
-            stats_result = db.execute_query(query_stats, (order_id,))
-
-            if stats_result:
-                total_items_in_order = stats_result[0]['TOTAL'] if stats_result[0]['TOTAL'] else 0
-                approved_items_in_order = stats_result[0]['APPROVED'] if stats_result[0]['APPROVED'] else 0
-
     # Проверяем, не приходованы ли уже ВСЕ записи
     already_approved = [w for w in whdetail_records if w['ISAPPROVED'] == 1]
 
@@ -430,6 +480,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
         first_whdetail = whdetail_records[0]
         date_approved = first_whdetail['DATEAPPROVED']
         date_str = ""
+        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
@@ -480,6 +531,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=None
         )
 
+    _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
     message = f"Успешно оприходовано {total_updated} элемент(ов) набора"
     if total_updated < len(whdetail_records):
         already_count = len(whdetail_records) - total_updated
@@ -698,40 +750,11 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
     if len(already_approved) == len(whdetail_records):
         date_approved = whdetail_data['DATEAPPROVED']
         date_str = ""
+        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
         # Получаем статистику по заказу для уже приходованного изделия
-        query_total_items = """
-            SELECT SUM(wd.qty) as TOTAL
-            FROM CT_WHDETAIL wd
-            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
-            LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
-            LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
-            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
-            WHERE o.ORDERID = ?
-            AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
-        """
-
-        query_approved_items = """
-            SELECT SUM(wd.qty) as APPROVED
-            FROM CT_WHDETAIL wd
-            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
-            LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
-            LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
-            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
-            LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
-            WHERE o.ORDERID = ?
-            AND wd.ISAPPROVED = 1
-            AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
-        """
-
-        total_items_result = db.execute_query(query_total_items, (order_id,))
-        approved_items_result = db.execute_query(query_approved_items, (order_id,))
-
-        total_items_in_order = total_items_result[0]['TOTAL'] if total_items_result and total_items_result[0]['TOTAL'] else 0
-        approved_items_in_order = approved_items_result[0]['APPROVED'] if approved_items_result and approved_items_result[0]['APPROVED'] else 0
 
         return ApprovalResponse(
             success=False,
@@ -780,79 +803,8 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=None
         )
 
-    # 8. Получаем статистику по заказу И проверяем готовность (ПОСЛЕ проводки)
-    # Объединяем все проверки в один запрос для оптимизации
     order_id = product_data['ORDERID']
-
-    # Единый запрос для получения статистики и проверки готовности заказа
-    query_order_stats = """
-        SELECT
-            SUM(wd.qty) as TOTAL,
-            SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
-            COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
-        FROM CT_WHDETAIL wd
-        JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
-        LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = el.ITEMSDETAILID
-        LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
-        LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
-        LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
-        WHERE o.ORDERID = ?
-        AND (el.CTTYPEELEMSID <> 1 OR gg.GGTYPEID = 50)
-    """
-
-    stats_result = db.execute_query(query_order_stats, (order_id,))
-
-    total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
-    approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
-    not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
-
-    # 9. Проверяем, не готов ли теперь весь заказ
-    # Если NOT_APPROVED_COUNT = 0, значит все изделия готовы
-    all_approved = (not_approved_count == 0)
-    has_items = (total_items_in_order > 0)
-
-    # Если все изделия готовы, устанавливаем статус "Completed" (ID = 4)
-    if all_approved and has_items:
-        try:
-            # Проверяем текущее состояние заказа
-            current_state_query = """
-                SELECT orderstateid FROM orders WHERE orderid = ?
-            """
-            current_state = db.execute_query(current_state_query, (order_id,))
-            current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
-
-            # Устанавливаем статус только если он еще не "Completed" (4)
-            if current_orderstateid != 4:
-                # Получаем максимальную позицию состояния для данного заказа
-                get_max_posit_query = """
-                    SELECT MAX(stateposit) as MAXPOSIT
-                    FROM orderstatesreg
-                    WHERE orderid = ?
-                """
-                max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
-                next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
-
-                # Добавляем запись в ORDERSTATESREG, используя генератор для ID
-                # EMPID = 8 (как в примере из базы, "Скрипт sChangeState")
-                insert_state_query = """
-                    INSERT INTO orderstatesreg
-                    (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
-                    VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
-                """
-                db.execute_update(insert_state_query, (order_id, next_posit))
-
-                # Обновляем состояние заказа
-                update_order_state_query = """
-                    UPDATE orders
-                    SET orderstateid = 4
-                    WHERE orderid = ?
-                """
-                db.execute_update(update_order_state_query, (order_id,))
-
-                print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
-        except Exception as e:
-            # Логируем ошибку, но не прерываем основной процесс
-            print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+    order_ready, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
 
     # 10. Формируем успешный ответ
     models_count = len(models_result)
@@ -864,7 +816,7 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
         message += f" ({already_count} уже было приходовано ранее)"
 
     # Если заказ полностью готов, добавляем это в сообщение
-    if all_approved and has_items:
+    if order_ready:
         message += f". ЗАКАЗ {order_number} ПОЛНОСТЬЮ ГОТОВ!"
         voice_message = f"Заказ {order_number} полностью готов!"
 
