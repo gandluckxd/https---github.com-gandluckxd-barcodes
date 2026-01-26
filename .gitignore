@@ -25,11 +25,13 @@ pip-delete-this-directory.txt
 
 # Virtual environments
 venv/
+venv*/
 ENV/
 env/
 .venv/
 api/venv/
 client/venv/
+**/venv*/
 
 # Environment variables
 .env
