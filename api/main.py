@@ -94,16 +94,19 @@ def parse_barcode(barcode: str) -> dict:
     }
 
 
-def get_order_stats(order_id):
+ORDER_STATS_FILTERS = {
+    "product": "(el.CTTYPEELEMSID = 2 AND COALESCE(m.SYSPROFID, 0) <> 27)",
+    "set": "(el.CTTYPEELEMSID = 7)",
+    "material": "(el.CTTYPEELEMSID = 1 AND gg.GGTYPEID IN (50, 42, 65))",
+}
+ORDER_STATS_ALL_CONDITION = "(" + " OR ".join(ORDER_STATS_FILTERS.values()) + ")"
+
+
+def _fetch_order_stats(order_id, condition_sql, params=None):
     if not order_id:
         return None, None, None
 
-    # Единый запрос: все позиции заказа со складской записью (CT_WHDETAIL)
-    # Правила отбора:
-    # 1) Изделия: CTTYPEELEMSID = 2, исключаем москитку (MODELS.SYSPROFID = 27)
-    # 2) Наборы: CTTYPEELEMSID = 7 (все)
-    # 3) Материалы: CTTYPEELEMSID = 1 и тип материала в (50, 42, 65)
-    query_order_stats = """
+    query_order_stats = f"""
         SELECT
             SUM(wd.qty) as TOTAL,
             SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
@@ -116,20 +119,50 @@ def get_order_stats(order_id):
         LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
         LEFT JOIN ORDERS o ON o.ORDERID = COALESCE(el.ORDERID, oi.ORDERID)
         WHERE o.ORDERID = ?
-          AND (
-                (el.CTTYPEELEMSID = 2 AND COALESCE(m.SYSPROFID, 0) <> 27)
-             OR (el.CTTYPEELEMSID = 7)
-             OR (el.CTTYPEELEMSID = 1 AND gg.GGTYPEID IN (50, 42, 65))
-          )
+          AND {condition_sql}
     """
 
-    stats_result = db.execute_query(query_order_stats, (order_id,))
+    query_params = [order_id]
+    if params:
+        query_params.extend(params)
+
+    stats_result = db.execute_query(query_order_stats, tuple(query_params))
 
     total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
     approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
     not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
 
     return total_items_in_order, approved_items_in_order, not_approved_count
+
+
+def get_order_stats(order_id):
+    return _fetch_order_stats(order_id, ORDER_STATS_ALL_CONDITION)
+
+
+def get_order_stats_by_type(order_id, stats_type, subtype_filter=None):
+    if not order_id:
+        return None, None
+
+    condition_sql = ORDER_STATS_FILTERS.get(stats_type)
+    if not condition_sql:
+        total_items_in_order, approved_items_in_order, _ = get_order_stats(order_id)
+        return total_items_in_order, approved_items_in_order
+
+    params = None
+    if stats_type == "material" and subtype_filter is not None:
+        condition_sql = "(el.CTTYPEELEMSID = 1 AND gg.GGTYPEID IN (50, 42, 65) AND gg.GGTYPEID = ?)"
+        params = [subtype_filter]
+    elif stats_type == "set" and subtype_filter:
+        condition_sql = (
+            "(el.CTTYPEELEMSID = 7 AND (CASE "
+            "WHEN POSITION(' ' IN TRIM(el.RNAME)) > 0 "
+            "THEN SUBSTRING(TRIM(el.RNAME) FROM 1 FOR POSITION(' ' IN TRIM(el.RNAME)) - 1) "
+            "ELSE TRIM(el.RNAME) END) = ?)"
+        )
+        params = [subtype_filter]
+
+    total_items_in_order, approved_items_in_order, _ = _fetch_order_stats(order_id, condition_sql, params)
+    return total_items_in_order, approved_items_in_order
 
 
 def check_and_update_order_ready(order_id, order_number=None):
@@ -210,8 +243,13 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
             e.HEIGHT,
             e.MODELID,
             e.ORDERITEMSID,
-            e.ITEMSDETAILID
+            e.ITEMSDETAILID,
+            gg.GGTYPEID as GGTYPEID,
+            ggt.NAME as GGTYPE_NAME
         FROM CT_ELEMENTS e
+        LEFT JOIN ITEMSDETAIL idetail ON idetail.ITEMSDETAILID = e.ITEMSDETAILID
+        LEFT JOIN GROUPGOODS gg ON gg.GRGOODSID = idetail.GRGOODSID
+        LEFT JOIN GROUPGOODSTYPES ggt ON ggt.GGTYPEID = gg.GGTYPEID
         WHERE e.ITEMSDETAILID = ?
     """
 
@@ -228,6 +266,8 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
     element_data = element_result[0]
     ctelementsid = element_data['CTELEMENTSID']
     element_name = element_data['ELEMENT_NAME'].strip() if element_data['ELEMENT_NAME'] else None
+    material_group_name = element_data['GGTYPE_NAME'].strip() if element_data.get('GGTYPE_NAME') else None
+    material_group_id = element_data.get('GGTYPEID')
     width = element_data['WIDTH']
     height = element_data['HEIGHT']
     orderitems_id = element_data['ORDERITEMSID']
@@ -294,7 +334,10 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
     if whdetail_data['ISAPPROVED'] == 1:
         date_approved = whdetail_data['DATEAPPROVED']
         date_str = ""
-        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+        check_and_update_order_ready(order_id, order_number)
+        total_items_in_order, approved_items_in_order = get_order_stats_by_type(
+            order_id, "material", material_group_id
+        )
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
@@ -305,7 +348,7 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=ProductInfo(
                 order_number=order_number,
                 proddate=proddate,
-                construction_number=None,
+                construction_number=material_group_name or element_name,
                 item_number=whdetail_data['ITEMNO'],
                 orderitems_id=orderitems_id,
                 orderitems_name=element_name,
@@ -338,7 +381,10 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=None
         )
 
-    _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+    check_and_update_order_ready(order_id, order_number)
+    total_items_in_order, approved_items_in_order = get_order_stats_by_type(
+        order_id, "material", material_group_id
+    )
 
     return ApprovalResponse(
         success=True,
@@ -347,7 +393,7 @@ async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
         product_info=ProductInfo(
             order_number=order_number,
             proddate=proddate,
-            construction_number=None,
+            construction_number=material_group_name or element_name,
             item_number=whdetail_data['ITEMNO'],
             orderitems_id=element_data['ORDERITEMSID'],
             orderitems_name=element_name,
@@ -440,6 +486,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
     # Берем первый элемент для отображения информации
     first_element = elements_result[0]
     element_name = first_element['ELEMENT_NAME'].strip() if first_element['ELEMENT_NAME'] else None
+    set_display_name = element_name.split()[0] if element_name else None
     width = first_element['WIDTH']
     height = first_element['HEIGHT']
     orderitems_id = first_element['ORDERITEMSID']
@@ -480,7 +527,10 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
         first_whdetail = whdetail_records[0]
         date_approved = first_whdetail['DATEAPPROVED']
         date_str = ""
-        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+        check_and_update_order_ready(order_id, order_number)
+        total_items_in_order, approved_items_in_order = get_order_stats_by_type(
+            order_id, "set", set_display_name
+        )
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
@@ -491,7 +541,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=ProductInfo(
                 order_number=order_number,
                 proddate=proddate,
-                construction_number=None,
+                construction_number=set_display_name,
                 item_number=None,
                 orderitems_id=first_element['ORDERITEMSID'],
                 orderitems_name=element_name,
@@ -531,7 +581,10 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
             product_info=None
         )
 
-    _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+    check_and_update_order_ready(order_id, order_number)
+    total_items_in_order, approved_items_in_order = get_order_stats_by_type(
+        order_id, "set", set_display_name
+    )
     message = f"Успешно оприходовано {total_updated} элемент(ов) набора"
     if total_updated < len(whdetail_records):
         already_count = len(whdetail_records) - total_updated
@@ -544,7 +597,7 @@ async def process_set_barcode(barcode_value: str) -> ApprovalResponse:
         product_info=ProductInfo(
             order_number=order_number,
             proddate=proddate,
-            construction_number=None,
+            construction_number=set_display_name,
             item_number=None,
             orderitems_id=first_element['ORDERITEMSID'],
             orderitems_name=element_name,
@@ -750,7 +803,8 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
     if len(already_approved) == len(whdetail_records):
         date_approved = whdetail_data['DATEAPPROVED']
         date_str = ""
-        _, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+        check_and_update_order_ready(order_id, order_number)
+        total_items_in_order, approved_items_in_order = get_order_stats_by_type(order_id, "product")
         if date_approved:
             date_str = f" (приходовано {date_approved.strftime('%d.%m.%Y %H:%M')})"
 
@@ -804,7 +858,8 @@ async def process_izd_barcode(barcode_value: str) -> ApprovalResponse:
         )
 
     order_id = product_data['ORDERID']
-    order_ready, total_items_in_order, approved_items_in_order, _ = check_and_update_order_ready(order_id, order_number)
+    order_ready, _, _, _ = check_and_update_order_ready(order_id, order_number)
+    total_items_in_order, approved_items_in_order = get_order_stats_by_type(order_id, "product")
 
     # 10. Формируем успешный ответ
     models_count = len(models_result)
