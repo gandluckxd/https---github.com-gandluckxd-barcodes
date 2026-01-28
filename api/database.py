@@ -7,21 +7,58 @@ import sys
 from contextlib import contextmanager
 from config import settings
 
-# Явно указываем путь к fbclient.dll
-if hasattr(sys, '_MEIPASS'):
-    # Если запущено из PyInstaller
-    fbclient_path = os.path.join(sys._MEIPASS, 'fbclient.dll')
-else:
-    # Если запущено из исходников
-    fbclient_path = os.path.join(os.path.dirname(__file__), 'fbclient.dll')
 
-# Проверяем существование файла и устанавливаем путь
-if os.path.exists(fbclient_path):
-    fdb.load_api(fbclient_path)
-    print(f"[OK] fbclient.dll загружена из: {fbclient_path}")
-else:
-    print(f"[WARNING] fbclient.dll не найдена по пути: {fbclient_path}")
-    print("  Попытка использовать системную библиотеку...")
+def _candidate_fbclient_paths() -> list[str]:
+    # Highest priority: explicit env/config path
+    candidates: list[str] = []
+    if settings.FBCLIENT_PATH:
+        candidates.append(settings.FBCLIENT_PATH)
+
+    base_dir = os.path.dirname(__file__)
+    meipass = getattr(sys, "_MEIPASS", None)
+
+    if sys.platform.startswith("win"):
+        if meipass:
+            candidates.append(os.path.join(meipass, "fbclient.dll"))
+        candidates.append(os.path.join(base_dir, "fbclient.dll"))
+    elif sys.platform == "darwin":
+        # Common macOS locations for Firebird client
+        candidates.extend(
+            [
+                os.path.join(base_dir, "libfbclient.dylib"),
+                "/Library/Frameworks/Firebird.framework/Versions/A/Libraries/libfbclient.dylib",
+                "/usr/local/lib/libfbclient.dylib",
+            ]
+        )
+    else:
+        # Linux and other *nix
+        candidates.extend(
+            [
+                os.path.join(base_dir, "libfbclient.so"),
+                "/usr/lib/libfbclient.so",
+                "/usr/lib64/libfbclient.so",
+                "/usr/local/lib/libfbclient.so",
+            ]
+        )
+
+    # Keep only existing files, preserve order
+    return [path for path in candidates if path and os.path.exists(path)]
+
+
+def _load_fbclient() -> None:
+    for path in _candidate_fbclient_paths():
+        try:
+            fdb.load_api(path)
+            print(f"[OK] Firebird client library loaded from: {path}")
+            return
+        except Exception as exc:
+            print(f"[WARNING] Failed to load Firebird client from: {path}")
+            print(f"  {exc}")
+
+    print("[WARNING] Firebird client library not found. Trying system default...")
+
+
+_load_fbclient()
 
 
 class Database:
@@ -99,4 +136,3 @@ class Database:
 
 # Глобальный экземпляр
 db = Database()
-

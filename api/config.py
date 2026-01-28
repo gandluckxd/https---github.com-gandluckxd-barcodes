@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     DB_USER: str = "sysdba"
     DB_PASSWORD: str = "masterkey"
     DB_CHARSET: str = "WIN1251"
+    # Optional explicit path to Firebird client library (fbclient.dll / libfbclient.dylib / libfbclient.so)
+    FBCLIENT_PATH: str = ""
     
     # API
     API_HOST: str = "0.0.0.0"
@@ -25,4 +27,3 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
-
