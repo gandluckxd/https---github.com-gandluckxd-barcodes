@@ -4,6 +4,8 @@ API сервер для системы учета готовности изде�
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 import fdb
+import threading
+import time
 from datetime import datetime, timedelta
 
 from models import (
@@ -28,6 +30,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def _start_order_ready_worker():
+    thread = threading.Thread(target=_order_ready_worker, daemon=True)
+    thread.start()
 
 
 def parse_barcode(barcode: str) -> dict:
@@ -100,6 +108,30 @@ ORDER_STATS_FILTERS = {
     "material": "(el.CTTYPEELEMSID = 1 AND gg.GGTYPEID IN (50, 42, 65))",
 }
 ORDER_STATS_ALL_CONDITION = "(" + " OR ".join(ORDER_STATS_FILTERS.values()) + ")"
+ORDER_READY_POLL_SECONDS = 300
+
+
+def get_order_stats_all_positions(order_id):
+    if not order_id:
+        return None, None, None
+
+    query_order_stats = """
+        SELECT
+            SUM(wd.qty) as TOTAL,
+            SUM(CASE WHEN wd.isapproved = 1 THEN wd.qty ELSE 0 END) as APPROVED,
+            COUNT(CASE WHEN wd.isapproved = 0 THEN 1 END) as NOT_APPROVED_COUNT
+        FROM CT_WHDETAIL wd
+        JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+        LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+        WHERE COALESCE(el.ORDERID, oi.ORDERID) = ?
+    """
+
+    stats_result = db.execute_query(query_order_stats, (order_id,))
+    total_items_in_order = stats_result[0]['TOTAL'] if stats_result and stats_result[0]['TOTAL'] else 0
+    approved_items_in_order = stats_result[0]['APPROVED'] if stats_result and stats_result[0]['APPROVED'] else 0
+    not_approved_count = stats_result[0]['NOT_APPROVED_COUNT'] if stats_result and stats_result[0]['NOT_APPROVED_COUNT'] else 0
+
+    return total_items_in_order, approved_items_in_order, not_approved_count
 
 
 def _fetch_order_stats(order_id, condition_sql, params=None):
@@ -169,7 +201,7 @@ def check_and_update_order_ready(order_id, order_number=None):
     if not order_id:
         return False, None, None, None
 
-    total_items_in_order, approved_items_in_order, not_approved_count = get_order_stats(order_id)
+    total_items_in_order, approved_items_in_order, not_approved_count = get_order_stats_all_positions(order_id)
 
     all_approved = (not_approved_count == 0)
     has_items = (total_items_in_order > 0)
@@ -211,6 +243,31 @@ def check_and_update_order_ready(order_id, order_number=None):
             print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
 
     return order_ready, total_items_in_order, approved_items_in_order, not_approved_count
+
+
+def _fetch_orders_for_ready_check():
+    query_orders = """
+        SELECT o.ORDERID, o.ORDERNO
+        FROM ORDERS o
+        WHERE o.DELETED = 0
+          AND o.ORDERSTATEID = 10
+    """
+    return db.execute_query(query_orders)
+
+
+def _order_ready_worker():
+    while True:
+        try:
+            orders = _fetch_orders_for_ready_check()
+            for order in orders:
+                try:
+                    check_and_update_order_ready(order.get('ORDERID'), order.get('ORDERNO'))
+                except Exception as exc:
+                    print(f"[ERROR] Ошибка при обновлении готовности заказа {order.get('ORDERNO')}: {exc}")
+        except Exception as exc:
+            print(f"[ERROR] Ошибка при проверке готовности заказов: {exc}")
+
+        time.sleep(ORDER_READY_POLL_SECONDS)
 
 
 async def process_itm_barcode(barcode_value: str) -> ApprovalResponse:
@@ -1443,4 +1500,3 @@ if __name__ == "__main__":
         port=settings.API_PORT,
         log_level="info"
     )
-
