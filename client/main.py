@@ -909,7 +909,10 @@ class BarcodeApp(QMainWindow):
             print(f"  approved_items_in_order: {product_info.get('approved_items_in_order')}")
         
         message_lower = message.lower()
-        is_already_ready = "уже было отмечено готовым" in message_lower
+        is_already_ready = (
+            "уже было отмечено готовым" in message_lower
+            or "уже был отмечен готовым" in message_lower
+        )
         is_already_shipped = ("уже отмечен отгруженным" in message_lower) or ("уже отгружен" in message_lower)
         is_not_ready = "еще не готов" in message_lower
 
@@ -1112,4 +1115,3 @@ if __name__ == '__main__':
         traceback.print_exc()
         input("Нажмите Enter для выхода...")
         sys.exit(1)
-

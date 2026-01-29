@@ -111,6 +111,16 @@ ORDER_STATS_ALL_CONDITION = "(" + " OR ".join(ORDER_STATS_FILTERS.values()) + ")
 ORDER_READY_POLL_SECONDS = 300
 
 
+def _log_worker(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[ORDER-READY] {timestamp} {message}")
+
+
+def _rows_to_dicts(cursor, rows):
+    columns = [desc[0] for desc in cursor.description]
+    return [dict(zip(columns, row)) for row in rows]
+
+
 def get_order_stats_all_positions(order_id):
     if not order_id:
         return None, None, None
@@ -197,6 +207,46 @@ def get_order_stats_by_type(order_id, stats_type, subtype_filter=None):
     return total_items_in_order, approved_items_in_order
 
 
+def _set_order_ready(order_id, order_number=None):
+    try:
+        current_state_query = """
+            SELECT orderstateid FROM orders WHERE orderid = ?
+        """
+        current_state = db.execute_query(current_state_query, (order_id,))
+        current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
+
+        if current_orderstateid != 4:
+            get_max_posit_query = """
+                SELECT MAX(stateposit) as MAXPOSIT
+                FROM orderstatesreg
+                WHERE orderid = ?
+            """
+            max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
+            next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
+
+            insert_state_query = """
+                INSERT INTO orderstatesreg
+                (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+                VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+            """
+            db.execute_update(insert_state_query, (order_id, next_posit))
+
+            update_order_state_query = """
+                UPDATE orders
+                SET orderstateid = 4
+                WHERE orderid = ?
+            """
+            db.execute_update(update_order_state_query, (order_id,))
+
+            _log_worker(f"Заказ {order_number or order_id} (ID={order_id}) переведен в статус 'Готов'")
+            return True
+    except Exception as e:
+        _log_worker(f"Ошибка при установке статуса 'Готов' для заказа {order_number or order_id}: {e}")
+        return False
+
+    return False
+
+
 def check_and_update_order_ready(order_id, order_number=None):
     if not order_id:
         return False, None, None, None
@@ -208,65 +258,116 @@ def check_and_update_order_ready(order_id, order_number=None):
     order_ready = all_approved and has_items
 
     if order_ready:
-        try:
-            current_state_query = """
-                SELECT orderstateid FROM orders WHERE orderid = ?
-            """
-            current_state = db.execute_query(current_state_query, (order_id,))
-            current_orderstateid = current_state[0]['ORDERSTATEID'] if current_state else None
-
-            if current_orderstateid != 4:
-                get_max_posit_query = """
-                    SELECT MAX(stateposit) as MAXPOSIT
-                    FROM orderstatesreg
-                    WHERE orderid = ?
-                """
-                max_posit_result = db.execute_query(get_max_posit_query, (order_id,))
-                next_posit = (max_posit_result[0]['MAXPOSIT'] or 0) + 1
-
-                insert_state_query = """
-                    INSERT INTO orderstatesreg
-                    (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
-                    VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
-                """
-                db.execute_update(insert_state_query, (order_id, next_posit))
-
-                update_order_state_query = """
-                    UPDATE orders
-                    SET orderstateid = 4
-                    WHERE orderid = ?
-                """
-                db.execute_update(update_order_state_query, (order_id,))
-
-                print(f"[OK] Заказ {order_number} (ID={order_id}) автоматически переведен в статус 'Готов'")
-        except Exception as e:
-            print(f"[ERROR] Ошибка при установке статуса 'Готов' для заказа {order_number}: {e}")
+        _set_order_ready(order_id, order_number)
 
     return order_ready, total_items_in_order, approved_items_in_order, not_approved_count
 
 
-def _fetch_orders_for_ready_check():
+def _fetch_ready_orders_for_update():
     query_orders = """
         SELECT o.ORDERID, o.ORDERNO
         FROM ORDERS o
+        JOIN (
+            SELECT
+                COALESCE(el.ORDERID, oi.ORDERID) AS ORDERID,
+                SUM(wd.QTY) AS TOTAL_QTY,
+                SUM(CASE WHEN COALESCE(wd.ISAPPROVED, 0) = 0 THEN 1 ELSE 0 END) AS NOT_APPROVED_COUNT
+            FROM CT_WHDETAIL wd
+            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+            GROUP BY COALESCE(el.ORDERID, oi.ORDERID)
+        ) s ON s.ORDERID = o.ORDERID
         WHERE o.DELETED = 0
           AND o.ORDERSTATEID = 10
+          AND s.TOTAL_QTY > 0
+          AND s.NOT_APPROVED_COUNT = 0
     """
     return db.execute_query(query_orders)
 
 
+def _fetch_ready_orders_for_update_conn(cursor):
+    query_orders = """
+        SELECT o.ORDERID, o.ORDERNO
+        FROM ORDERS o
+        JOIN (
+            SELECT
+                COALESCE(el.ORDERID, oi.ORDERID) AS ORDERID,
+                SUM(wd.QTY) AS TOTAL_QTY,
+                SUM(CASE WHEN COALESCE(wd.ISAPPROVED, 0) = 0 THEN 1 ELSE 0 END) AS NOT_APPROVED_COUNT
+            FROM CT_WHDETAIL wd
+            JOIN CT_ELEMENTS el ON wd.CTELEMENTSID = el.CTELEMENTSID
+            LEFT JOIN ORDERITEMS oi ON el.ORDERITEMSID = oi.ORDERITEMSID
+            GROUP BY COALESCE(el.ORDERID, oi.ORDERID)
+        ) s ON s.ORDERID = o.ORDERID
+        WHERE o.DELETED = 0
+          AND o.ORDERSTATEID = 10
+          AND s.TOTAL_QTY > 0
+          AND s.NOT_APPROVED_COUNT = 0
+    """
+    cursor.execute(query_orders)
+    return _rows_to_dicts(cursor, cursor.fetchall())
+
+
+def _set_order_ready_conn(cursor, order_id, order_number=None):
+    current_state_query = """
+        SELECT orderstateid FROM orders WHERE orderid = ?
+    """
+    cursor.execute(current_state_query, (order_id,))
+    current_state = cursor.fetchone()
+    current_orderstateid = current_state[0] if current_state else None
+
+    if current_orderstateid == 4:
+        return False
+
+    get_max_posit_query = """
+        SELECT MAX(stateposit) as MAXPOSIT
+        FROM orderstatesreg
+        WHERE orderid = ?
+    """
+    cursor.execute(get_max_posit_query, (order_id,))
+    max_posit_result = cursor.fetchone()
+    next_posit = ((max_posit_result[0] or 0) if max_posit_result else 0) + 1
+
+    insert_state_query = """
+        INSERT INTO orderstatesreg
+        (orderstatesregid, orderid, orderstateid, empid, changedate, stateposit, rcomment)
+        VALUES (GEN_ID(GEN_ORDERSTATESREG, 1), ?, 4, 8, CURRENT_TIMESTAMP, ?, 'Автоматическая установка статуса после штрихкодирования')
+    """
+    cursor.execute(insert_state_query, (order_id, next_posit))
+
+    update_order_state_query = """
+        UPDATE orders
+        SET orderstateid = 4
+        WHERE orderid = ?
+    """
+    cursor.execute(update_order_state_query, (order_id,))
+
+    _log_worker(f"Заказ {order_number or order_id} (ID={order_id}) переведен в статус 'Готов'")
+    return True
+
+
 def _order_ready_worker():
     while True:
+        _log_worker("Запуск цикла проверки готовности заказов")
         try:
-            orders = _fetch_orders_for_ready_check()
-            for order in orders:
-                try:
-                    check_and_update_order_ready(order.get('ORDERID'), order.get('ORDERNO'))
-                except Exception as exc:
-                    print(f"[ERROR] Ошибка при обновлении готовности заказа {order.get('ORDERNO')}: {exc}")
+            with db.get_connection() as conn:
+                cursor = conn.cursor()
+                orders = _fetch_ready_orders_for_update_conn(cursor)
+                _log_worker(f"Найдено готовых заказов: {len(orders)}")
+                updated = 0
+                for order in orders:
+                    try:
+                        if _set_order_ready_conn(cursor, order.get('ORDERID'), order.get('ORDERNO')):
+                            conn.commit()
+                            updated += 1
+                    except Exception as exc:
+                        conn.rollback()
+                        _log_worker(f"Ошибка при обновлении готовности заказа {order.get('ORDERNO')}: {exc}")
+                _log_worker(f"Переведено в статус 'Готов': {updated}")
         except Exception as exc:
-            print(f"[ERROR] Ошибка при проверке готовности заказов: {exc}")
+            _log_worker(f"Ошибка при проверке готовности заказов: {exc}")
 
+        _log_worker(f"Следующая проверка через {ORDER_READY_POLL_SECONDS} сек")
         time.sleep(ORDER_READY_POLL_SECONDS)
 
 
